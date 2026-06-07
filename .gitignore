@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+._*
+Icon
+Icon?
+
+# Sorties générées par clean-glb.sh
+glb/clean/
+
+# Config locale agent / éditeurs
+.claude/
+.vscode/
+
+# Node (si jamais)
+node_modules/
+npm-debug.log*

@@ -1,0 +1,58 @@
+{
+  "data": {
+    "version": "current",
+    "baseRes": 3.5,
+    "metalColor": "black",
+    "creationDate": "2026-06-05T14:47:54.131Z",
+    "lastUpdate": "2026-06-05T16:33:27.577Z",
+    "woodColor": "black",
+    "vRes": 2,
+    "lastVersion": "v5",
+    "username": "jcpoirot",
+    "id": "6b0f659d-a24a-453a-a704-4c62e2807a7e",
+    "res": 6,
+    "elements": [
+      {
+        "x": 80,
+        "width": 320,
+        "y": 44,
+        "id": 0,
+        "type": "gridGF",
+        "height": 308
+      },
+      {
+        "x": 56,
+        "width": 180,
+        "y": 44,
+        "id": 1,
+        "type": "board40x15",
+        "height": 84
+      },
+      {
+        "x": 540,
+        "width": 180,
+        "y": 132,
+        "id": 2,
+        "type": "board40x15",
+        "height": 84
+      },
+      {
+        "x": 212,
+        "width": 180,
+        "y": 264,
+        "id": 3,
+        "type": "board40x15",
+        "height": 84
+      },
+      {
+        "x": 540,
+        "width": 320,
+        "y": 132,
+        "id": 4,
+        "type": "gridGF",
+        "height": 308
+      }
+    ],
+    "title": "Test modélisation"
+  }
+}

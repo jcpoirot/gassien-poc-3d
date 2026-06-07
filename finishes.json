@@ -1,0 +1,14 @@
+{
+  "_comment": "Finitions persistantes (bois/métal). Chargé à l'init, écrase les défauts de viewer.js. Couleurs en hex. Bois : maps par rôle (face/edge/raw) OU color, + params {repeat, brightness, roughness, envIntensity} réglés via les sliders. Bouton « Copier les finitions » pour exporter l'état courant ici.",
+  "wood": {
+    "oak":   { "label": "Chêne Massif", "maps": { "wood_face": "oak_face.jpg",   "wood_edge": "oak_edge.jpg",   "wood_raw": "wood_raw.jpg" }, "params": { "repeat": 3.3, "brightness": 0.45, "roughness": 0.50, "envIntensity": 0.4 } },
+    "birch": { "label": "Bouleau CP",   "maps": { "wood_face": "birch_face.jpg", "wood_edge": "birch_edge.jpg", "wood_raw": "wood_raw.jpg" }, "params": { "repeat": 5.9, "brightness": 0.45, "roughness": 0.25, "envIntensity": 0.4 } },
+    "black": { "label": "Noir",  "color": "#111111", "params": { "repeat": 1, "brightness": 1, "roughness": 0.50, "envIntensity": 1 } },
+    "white": { "label": "Blanc", "color": "#eaeaea", "params": { "repeat": 1, "brightness": 1, "roughness": 0.60, "envIntensity": 1 } }
+  },
+  "metal": {
+    "black": { "label": "Noir",   "color": "#141414", "metalness": 1,    "roughness": 0.42 },
+    "white": { "label": "Blanc",  "color": "#f0f0f0", "metalness": 0,    "roughness": 0.45 },
+    "brass": { "label": "Laiton", "color": "#c2a86e", "metalness": 0.85, "roughness": 0.62 }
+  }
+}
