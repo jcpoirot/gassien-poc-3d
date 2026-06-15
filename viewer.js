@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // -----------------------------------------------------------------------------
@@ -122,9 +123,9 @@ const WOOD_FINISHES = {
 };
 const DEFAULT_WOOD_PARAMS = { repeat: 1, brightness: 1, roughness: 0.6, envIntensity: 1 };
 const METAL_FINISHES = {
-  black: { label: 'Noir',   color: 0x141414, metalness: 1, roughness: 0.42 },
-  white: { label: 'Blanc',  color: 0xf0f0f0, metalness: 0, roughness: 0.45 }, // peinture = diélectrique
-  brass: { label: 'Laiton', color: 0xc2a86e, metalness: 0.85, roughness: 0.62 }, // satiné/mat (cf. réf.)
+  black: { label: 'Noir',   color: 0x141414, metalness: 0, roughness: 0.5, envIntensity: 1 }, // peinture diélectrique
+  white: { label: 'Blanc',  color: 0xf0f0f0, metalness: 0, roughness: 0.5, envIntensity: 1 }, // peinture diélectrique
+  brass: { label: 'Laiton', color: 0xc2a86e, metalness: 0.85, roughness: 0.5, envIntensity: 1 }, // satiné/mat (cf. réf.)
 };
 
 // Toutes les images bois à précharger à l'init.
@@ -178,6 +179,7 @@ function applyMetalFinish(m) {
   m.color.set(metalFinish.color);
   m.metalness = metalFinish.metalness ?? 1;
   m.roughness = metalFinish.roughness ?? 0.4;
+  m.envMapIntensity = metalFinish.envIntensity ?? 1;
 }
 
 // =============================================================================
@@ -210,6 +212,28 @@ camera.position.set(0.9, 0.7, 1.4);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true; // pan vertical/horizontal dans le plan écran
+// boutons : gauche=rotation, droit=panoramique, milieu=zoom (défaut)
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+
+// Panoramique style SketchUp (outil « H ») : maintenir Espace ou H + glisser = pan.
+let panKeyHeld = false;
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if ((e.code === 'Space' || e.key === 'h' || e.key === 'H') && !panKeyHeld) {
+    panKeyHeld = true;
+    controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+    renderer.domElement.style.cursor = 'grab';
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' || e.key === 'h' || e.key === 'H') {
+    panKeyHeld = false;
+    controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    renderer.domElement.style.cursor = '';
+  }
+});
 
 // Lumière d'appoint douce (l'essentiel vient de l'environnement)
 const key = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -248,11 +272,36 @@ let helpersVisible = true;
 const loader = new GLTFLoader();
 const glbCache = new Map(); // type -> gltf.scene (template, non ajouté à la scène)
 
+// Chemin du glb : depuis le CATALOG si défini, sinon glb/done/<type>.glb.
+function glbPathOf(type) {
+  return CATALOG[type]?.glb || (GLB_DIR + type + '.glb');
+}
+
+// Charge catalog.json (métadonnées de placement/validation) et complète le CATALOG.
+async function loadCatalog() {
+  try {
+    const res = await fetch('./catalog.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    for (const [type, o] of Object.entries(data)) {
+      if (type.startsWith('_') || !o) continue;
+      CATALOG[type] = {
+        ...(CATALOG[type] || {}),
+        glb: glbPathOf(type),
+        anchor: o.anchor || 'bottom',
+        depthLayer: o.depthLayer ?? 0,
+        slots: o.slots || [],
+        expect: o.expect || undefined, // null/absent => audit informatif
+      };
+    }
+  } catch (e) {
+    console.warn('catalog.json non chargé (CATALOG par défaut utilisé) :', e.message);
+  }
+}
+
 async function loadTemplate(type) {
   if (glbCache.has(type)) return glbCache.get(type);
-  const def = CATALOG[type];
-  if (!def) throw new Error(`Type inconnu dans le CATALOG : ${type}`);
-  const gltf = await loader.loadAsync(def.glb);
+  const gltf = await loader.loadAsync(glbPathOf(type));
   glbCache.set(type, gltf.scene);
   return gltf.scene;
 }
@@ -440,15 +489,20 @@ async function runAudit(type) {
   const model = template.clone(true);
   content.add(model);
 
-  // --- Mesure bbox vs expect ---
+  // --- Mesure bbox (vs expect si le composant est dans le CATALOG) ---
   const { box, size } = measure(model);
   blockTitle('Dimensions (bbox mesurée)');
+  if (!def?.expect) log('Pas de dimensions attendues (expect) pour ce composant — audit informatif.', 'info');
   for (const axis of ['x', 'y', 'z']) {
     const got = size[axis];
-    const exp = def.expect[`size${axis.toUpperCase()}`];
-    const delta = got - exp;
-    const level = Math.abs(delta) <= TOL ? 'ok' : 'warn';
-    log(`${axis.toUpperCase()} = ${mm(got)} mm  (attendu ${mm(exp)} mm, Δ ${delta >= 0 ? '+' : ''}${mm(delta)} mm)`, level);
+    const exp = def?.expect?.[`size${axis.toUpperCase()}`];
+    if (exp === undefined) {
+      log(`${axis.toUpperCase()} = ${mm(got)} mm`, 'info');
+    } else {
+      const delta = got - exp;
+      const level = Math.abs(delta) <= TOL ? 'ok' : 'warn';
+      log(`${axis.toUpperCase()} = ${mm(got)} mm  (attendu ${mm(exp)} mm, Δ ${delta >= 0 ? '+' : ''}${mm(delta)} mm)`, level);
+    }
   }
 
   // --- Origine / pivot (sujet n°1) ---
@@ -527,7 +581,14 @@ function addCornerMarker(pos, color) {
   const m = new THREE.MeshBasicMaterial({ color });
   const s = new THREE.Mesh(g, m);
   s.position.copy(pos);
+  s.userData.helper = true; // repère : exclu du PNG et de l'export GLB
   content.add(s);
+}
+
+// Masque/affiche tous les repères (groupe helpers + objets repères dans content).
+function setAllHelpersVisible(v) {
+  helpers.visible = v;
+  content.traverse((o) => { if (o.userData?.helper) o.visible = v; });
 }
 
 // =============================================================================
@@ -644,10 +705,12 @@ function placeAll(refit) {
     }
   }
 
-  // bbox globale
+  // bbox globale (repère : exclue du PNG et de l'export GLB)
   if (placed.length) {
     const gb = new THREE.Box3().setFromObject(content);
-    content.add(new THREE.Box3Helper(gb, new THREE.Color(0x6ab0ff)));
+    const bboxHelper = new THREE.Box3Helper(gb, new THREE.Color(0x6ab0ff));
+    bboxHelper.userData.helper = true;
+    content.add(bboxHelper);
     if (refit) frameBox(gb);
   }
 
@@ -758,10 +821,18 @@ function populateFinishSelectors() {
 }
 let finishSelectorsReady = false;
 
+// Finition d'AFFICHAGE par défaut au 1er rendu (override one-shot du JSON).
+let pendingDisplayFinish = { wood: 'birch', metal: 'black' };
+
 // Initialise les finitions depuis le JSON et aligne l'UI.
 function initFinishesFromJSON(data) {
   if (!finishSelectorsReady) { populateFinishSelectors(); finishSelectorsReady = true; }
-  const w = data.woodColor, m = data.metalColor;
+  let w = data.woodColor, m = data.metalColor;
+  if (pendingDisplayFinish) { // au démarrage : Bouleau / Noir, puis comportement normal
+    if (WOOD_FINISHES[pendingDisplayFinish.wood]) w = pendingDisplayFinish.wood;
+    if (METAL_FINISHES[pendingDisplayFinish.metal]) m = pendingDisplayFinish.metal;
+    pendingDisplayFinish = null;
+  }
   woodFinish = WOOD_FINISHES[w] ? { ...WOOD_FINISHES[w] } : { ...WOOD_FINISHES.black };
   metalFinish = METAL_FINISHES[m] ? { ...METAL_FINISHES[m] } : { ...METAL_FINISHES.black };
   finishWoodSel.value = WOOD_FINISHES[w] ? w : 'black';
@@ -769,6 +840,7 @@ function initFinishesFromJSON(data) {
   if (woodFinish.color !== undefined) woodColorInput.value = intToHex(woodFinish.color);
   if (metalFinish.color !== undefined) metalColorInput.value = intToHex(metalFinish.color);
   syncWoodSliders();
+  syncMetalSliders();
 }
 
 function onWoodSelect() {
@@ -791,6 +863,24 @@ const TEX_SLIDERS = [
   { id: 'tex-env',    key: 'envIntensity', fmt: (v) => v.toFixed(1) },
 ];
 
+// Config des sliders métal (éditent directement la finition métal active).
+const MET_SLIDERS = [
+  { id: 'met-metal', key: 'metalness',    fmt: (v) => v.toFixed(2), def: 1 },
+  { id: 'met-rough', key: 'roughness',    fmt: (v) => v.toFixed(2), def: 0.4 },
+  { id: 'met-env',   key: 'envIntensity', fmt: (v) => v.toFixed(1), def: 1 },
+];
+
+// Aligne les sliders métal sur la finition métal active.
+function syncMetalSliders() {
+  for (const s of MET_SLIDERS) {
+    const input = document.getElementById(s.id);
+    const out = document.getElementById(s.id + '-v');
+    const v = metalFinish[s.key] ?? s.def;
+    input.value = v;
+    out.textContent = s.fmt(v);
+  }
+}
+
 // Charge finishes.json et fusionne dans WOOD_FINISHES / METAL_FINISHES.
 async function loadFinishes() {
   try {
@@ -808,7 +898,7 @@ async function loadFinishes() {
     }
     for (const [k, o] of Object.entries(data.metal || {})) {
       if (k.startsWith('_')) continue;
-      METAL_FINISHES[k] = { label: o.label, color: toInt(o.color), metalness: o.metalness ?? 1, roughness: o.roughness ?? 0.4 };
+      METAL_FINISHES[k] = { label: o.label, color: toInt(o.color), metalness: o.metalness ?? 1, roughness: o.roughness ?? 0.4, envIntensity: o.envIntensity ?? 1 };
     }
   } catch (e) {
     console.warn('finishes.json non chargé (défauts utilisés) :', e.message);
@@ -827,7 +917,7 @@ function serializeFinishes() {
   }
   const metal = {};
   for (const [k, f] of Object.entries(METAL_FINISHES)) {
-    metal[k] = { label: f.label, color: intToHex(f.color), metalness: f.metalness, roughness: f.roughness };
+    metal[k] = { label: f.label, color: intToHex(f.color), metalness: f.metalness, roughness: f.roughness, envIntensity: f.envIntensity ?? 1 };
   }
   return { wood, metal };
 }
@@ -856,11 +946,12 @@ function syncWoodSliders() {
 function onMetalSelect() {
   const v = finishMetalSel.value;
   if (v === 'custom') {
-    metalFinish = { color: hexToInt(metalColorInput.value), metalness: 0.6, roughness: 0.4, label: 'perso' };
+    metalFinish = { color: hexToInt(metalColorInput.value), metalness: 0.6, roughness: 0.4, envIntensity: 1, label: 'perso' };
   } else {
-    metalFinish = { ...METAL_FINISHES[v] };
+    metalFinish = { ...METAL_FINISHES[v] }; // partagé par réf -> sliders persistent dans la session
     metalColorInput.value = intToHex(metalFinish.color);
   }
+  syncMetalSliders();
   if (currentSchema) placeAll(false);
 }
 
@@ -868,8 +959,8 @@ function onMetalSelect() {
 // Snapshot PNG transparent
 // =============================================================================
 function snapshot() {
-  const prevVisible = helpers.visible;
-  helpers.visible = false; // pas de repères dans l'export
+  const prevHelpers = helpers.visible;
+  setAllHelpersVisible(false); // PNG = uniquement les objets, aucun repère
   const prevRatio = renderer.getPixelRatio();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * 2); // ×2 supplémentaire
   onResize();
@@ -884,9 +975,38 @@ function snapshot() {
     URL.revokeObjectURL(url);
     // restore
     renderer.setPixelRatio(prevRatio);
-    helpers.visible = prevVisible;
+    setAllHelpersVisible(true);
+    helpers.visible = prevHelpers; // respecte le toggle « Repères »
     onResize();
   }, 'image/png');
+}
+
+// Exporte la composition (objets placés + finitions) en .glb, sans les repères.
+function exportCompositionGLB() {
+  if (!content.children.some((o) => o.isMesh || o.children?.length)) {
+    log('Rien à exporter (composition vide).', 'warn');
+    return;
+  }
+  const prevHelpers = helpers.visible;
+  setAllHelpersVisible(false); // exclut repères/bbox de l'export
+  const exporter = new GLTFExporter();
+  const restore = () => { setAllHelpersVisible(true); helpers.visible = prevHelpers; };
+  exporter.parse(
+    content,
+    (result) => {
+      const blob = new Blob([result], { type: 'model/gltf-binary' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'gassien-composition.glb';
+      a.click();
+      URL.revokeObjectURL(url);
+      restore();
+      log('Composition exportée : gassien-composition.glb ✓', 'ok');
+    },
+    (err) => { restore(); log('Export GLB échoué : ' + (err?.message || err), 'err'); },
+    { binary: true, onlyVisible: true }
+  );
 }
 
 // =============================================================================
@@ -917,11 +1037,37 @@ const ctrlAudit = document.getElementById('ctrl-audit');
 const ctrlCompo = document.getElementById('ctrl-compo');
 const auditSelect = document.getElementById('audit-select');
 
-// peupler le sélecteur d'audit
-for (const type of Object.keys(CATALOG)) {
-  const opt = document.createElement('option');
-  opt.value = type; opt.textContent = type;
-  auditSelect.appendChild(opt);
+// Peuple le sélecteur d'audit avec tous les composants réellement présents dans
+// glb/done/. On SONDE (HEAD) chaque composant connu (offset.json + CATALOG) car
+// la plupart des serveurs statiques (ex. Live Server) ne renvoient pas de listing
+// de dossier. Bonus : on ajoute aussi le listing serveur s'il est disponible.
+async function populateAuditSelect() {
+  const candidates = new Set([...Object.keys(OFFSETS), ...Object.keys(CATALOG)]);
+  try {
+    const res = await fetch('./' + GLB_DIR);
+    const html = await res.text();
+    for (const m of html.matchAll(/href="([^"?]+\.glb)"/gi)) {
+      candidates.add(decodeURIComponent(m[1].split('/').pop()).replace(/\.glb$/i, ''));
+    }
+  } catch (e) { /* listing indispo : on s'appuie sur le sondage */ }
+
+  // garde ceux réellement présents (HEAD 200) dans glb/done/
+  const checks = await Promise.all([...candidates].map(async (t) => {
+    try { const r = await fetch(glbPathOf(t), { method: 'HEAD' }); return r.ok ? t : null; }
+    catch (e) { return null; }
+  }));
+  let types = checks.filter(Boolean).sort();
+  if (!types.length) types = Object.keys(CATALOG); // repli ultime
+
+  const prev = auditSelect.value;
+  auditSelect.innerHTML = '';
+  for (const type of types) {
+    const opt = document.createElement('option');
+    opt.value = type;
+    opt.textContent = type + (CATALOG[type]?.expect ? '' : ' •'); // • = pas d'expect (audit informatif)
+    auditSelect.appendChild(opt);
+  }
+  if (types.includes(prev)) auditSelect.value = prev;
 }
 
 function setMode(m) {
@@ -945,6 +1091,7 @@ document.getElementById('toggle-helpers').addEventListener('click', (e) => {
 });
 
 document.getElementById('snapshot').addEventListener('click', snapshot);
+document.getElementById('export-glb').addEventListener('click', exportCompositionGLB);
 
 // --- Réglage des décalages ---
 for (const btn of document.querySelectorAll('.nudge')) {
@@ -963,7 +1110,8 @@ woodColorInput.addEventListener('input', () => {
   if (currentSchema) placeAll(false);
 });
 metalColorInput.addEventListener('input', () => {
-  metalFinish = { color: hexToInt(metalColorInput.value), metalness: 0.6, roughness: 0.4, label: 'perso' };
+  const keep = { metalness: metalFinish.metalness ?? 0.6, roughness: metalFinish.roughness ?? 0.4, envIntensity: metalFinish.envIntensity ?? 1 };
+  metalFinish = { color: hexToInt(metalColorInput.value), ...keep, label: 'perso' };
   finishMetalSel.value = 'custom';
   if (currentSchema) placeAll(false);
 });
@@ -978,6 +1126,20 @@ for (const s of TEX_SLIDERS) {
     const v = parseFloat(input.value);
     if (!woodFinish.params) woodFinish.params = { ...DEFAULT_WOOD_PARAMS };
     woodFinish.params[s.key] = v;
+    out.textContent = s.fmt(v);
+    if (currentSchema) placeAll(false);
+  });
+}
+
+// --- Réglages métal (sliders) : éditent la finition métal active + le registre ---
+for (const s of MET_SLIDERS) {
+  const input = document.getElementById(s.id);
+  const out = document.getElementById(s.id + '-v');
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    metalFinish[s.key] = v;
+    const key = finishMetalSel.value; // persiste dans le registre pour « Copier les finitions »
+    if (key !== 'custom' && METAL_FINISHES[key]) METAL_FINISHES[key][s.key] = v;
     out.textContent = s.fmt(v);
     if (currentSchema) placeAll(false);
   });
@@ -1030,9 +1192,11 @@ document.getElementById('json-file').addEventListener('change', (e) => {
 onResize();
 animate();
 (async () => {
-  await loadOffsets();   // table de décalages persistante (offset.json)
-  await loadFinishes();  // finitions persistantes (finishes.json)
-  preloadTextures();     // textures bois (textures/*.jpg)
-  await loadSchema();    // composition courante
-  setMode('audit');      // démarre sur l'audit du 1er composant
+  await loadCatalog();        // métadonnées composants (catalog.json)
+  await loadOffsets();        // table de décalages persistante (offset.json)
+  await loadFinishes();       // finitions persistantes (finishes.json)
+  preloadTextures();          // textures bois (textures/*.jpg)
+  await populateAuditSelect();// composants disponibles dans glb/done/
+  await loadSchema();         // composition courante
+  setMode('compo');           // démarre sur la composition (finition par défaut Bouleau/Noir)
 })();

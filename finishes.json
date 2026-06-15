@@ -7,8 +7,8 @@
     "white": { "label": "Blanc", "color": "#eaeaea", "params": { "repeat": 1, "brightness": 1, "roughness": 0.60, "envIntensity": 1 } }
   },
   "metal": {
-    "black": { "label": "Noir",   "color": "#141414", "metalness": 1,    "roughness": 0.42 },
-    "white": { "label": "Blanc",  "color": "#f0f0f0", "metalness": 0,    "roughness": 0.45 },
-    "brass": { "label": "Laiton", "color": "#c2a86e", "metalness": 0.85, "roughness": 0.62 }
+    "black": { "label": "Noir",   "color": "#141414", "metalness": 0,    "roughness": 0.5, "envIntensity": 1 },
+    "white": { "label": "Blanc",  "color": "#f0f0f0", "metalness": 0,    "roughness": 0.5, "envIntensity": 1 },
+    "brass": { "label": "Laiton", "color": "#c2a86e", "metalness": 0.85, "roughness": 0.5, "envIntensity": 1 }
   }
 }

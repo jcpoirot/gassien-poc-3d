@@ -127,10 +127,14 @@ Calibration **visuelle** : mode Composition → panneau « Réglage décalage / 
 
 ---
 
-## Registre des composants (à construire et compléter)
+## Registre des composants — `catalog.json`
+
+**Source de vérité = `catalog.json`** (racine, chargé à l'init par `loadCatalog`, complète/écrase le `CATALOG` de `viewer.js`). Liste **les 51 composants** (cf. `allComponents`). Par entrée : `anchor` (toujours `bottom`), `depthLayer` (m ; **grille=0**, monté=**0.012**), `slots` (rôles matières attendus), `expect` (dimensions monde `{sizeX,sizeY,sizeZ}` en m pour la validation, **`null` si non mesuré** → audit informatif, marqué `•` dans le sélecteur). Le `glb` est résolu auto (`glb/done/<type>.glb`) et l'`offset` vient d'`offset.json` (ne pas dupliquer ici).
+
+`expect` est **mesuré** pour les glb présents (`gridGF`, `board40x15/40x20/60x15/60x20`) ; à compléter quand chaque glb arrive (mesure via l'audit Mode 1).
 
 ```js
-// type -> asset + métadonnées validées
+// défaut interne (viewer.js) — surchargé par catalog.json
 const CATALOG = {
   gridGF: {
     glb: 'gridGF.glb',
@@ -168,7 +172,7 @@ Set de finitions (`WOOD_FINISHES` / `METAL_FINISHES`, surchargés par `finishes.
 - **Noir**, **Blanc** : couleur unie sur tous les rôles bois.
 - **Couleur perso** : sélecteur `Couleur bois`.
 
-**Métal** (`metalFinish`) : **Noir**, **Blanc** (peinture, `metalness 0`, pas du chrome), **Laiton**, + **Couleur perso** (`Couleur métal`).
+**Métal** (`metalFinish`) : **Noir**, **Blanc** (peinture, `metalness 0`, pas du chrome), **Laiton**, + **Couleur perso** (`Couleur métal`). Sliders live **Métallicité / Rugosité / Reflets env.** (`MET_SLIDERS`) par finition — calibrage visuel du reflet (les fils fins de grille vs crochets ne captent pas l'environnement de la même façon ; ⚠️ ce n'est PAS un bug de normales : après nettoyage les buffers sont entrelacés `byteStride`, normales OK). Persistés dans `finishes.json`.
 
 **Textures** : fichiers attendus dans `textures/` = `oak_face/oak_edge`, `birch_face/birch_edge`, `wood_raw` (.jpg), **préchargés à l'init** (`preloadTextures`). Chargement via `getTexture()` (cache, `colorSpace = SRGBColorSpace`, `wrapS/T = RepeatWrapping`, `anisotropy = getMaxAnisotropy()`). Les UV viennent du `.glb` (positionnées dans SketchUp → sens du fil). `wood_raw` utilise toujours `wood_raw.jpg` ; un rôle bois absent des maps retombe sur `wood_face`.
 
@@ -187,9 +191,9 @@ Pièges retenus : `m.map = null` pour une finition unie ; `woodColor`/`metalColo
 Deux modes :
 
 ### Mode 1 — Audit des composants
-Pour chaque `.glb` du `CATALOG` :
+Le sélecteur liste **tous les `.glb` présents dans `glb/done/`**, pas seulement le `CATALOG`. Détection par **sondage HEAD** de chaque composant connu (`offset.json` + CATALOG) — fiable même sans listing de dossier (Live Server). Les composants hors CATALOG sont marqués `•` (audit informatif, sans `expect`). Pour chaque `.glb` :
 - charge et vérifie qu'il parse ;
-- mesure la **bbox** → compare à `expect` (tolérance ~2 mm), signale tout écart d'échelle ;
+- mesure la **bbox** → compare à `expect` si défini (tolérance ~2 mm), sinon affiche la mesure ;
 - vérifie que l'**origine** est au coin attendu (gauche-bas-arrière) ;
 - liste les **noms de matériaux** et vérifie qu'ils ont tous un rôle dans `ROLE_BY_MATERIAL` (sinon : warning « rôle manquant ») ;
 - indique si des **textures de finition** sont encore incrustées (devraient être génériques) ;
@@ -200,7 +204,8 @@ Pour chaque `.glb` du `CATALOG` :
 - applique `woodColor`/`metalColor` ;
 - affiche en Three.js (OrbitControls), avec repères : axes monde, plan du mur (Z=0), bbox globale ;
 - signale les **anomalies de placement** : composant hors de la grille, chevauchement anormal, écart entre footprint JSON et bbox réelle ;
-- bouton **snapshot PNG transparent** (rendu ×2–3, `ShadowMaterial` pour l'ombre de contact).
+- bouton **snapshot PNG transparent** (rendu ×2, **sans aucun repère** — `setAllHelpersVisible(false)` masque axes/mur/sol + bbox/marqueurs taggés `userData.helper`).
+- bouton **⬇ GLB composition** : exporte `content` (objets placés + finitions appliquées) en `.glb` via `GLTFExporter` (`binary:true, onlyVisible:true` → repères exclus). ⚠️ poids élevé (textures bois embarquées) ; passer au besoin par un resize.
 
 ### Setup Three.js
 - `WebGLRenderer({ antialias:true, alpha:true, preserveDrawingBuffer:true })`, `setClearColor(0,0)`.
@@ -231,7 +236,7 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 
 **Dossiers** : `glb/` = composants **à faire** (exports bruts) ; `glb/done/` = composants **nettoyés**, **chargés par le viewer** (`GLB_DIR = 'glb/done/'`).
 
-**Après export** — script `./clean-glb.sh` (sans argument : nettoie tous les `glb/*.glb` ; utilise `npx @gltf-transform/cli`) :
+**Après export** — script `./clean-glb.sh` (sans argument : nettoie les `glb/*.glb` ; **ignore ceux déjà à jour dans `glb/done/`** — `FORCE=1` pour tout refaire ; utilise `npx @gltf-transform/cli`) :
 - `prune` (retire accessors/matériaux/**nœuds vides** orphelins) → nettoie les parasites,
 - `dedup` (fusionne dupliqués), `weld` (soude les sommets),
 - `resize` (**réduit les textures à 64 px**, surchargeable `MAXTEX=32`) → **les UV restent sur le maillage**, le poids chute (mesuré : `board40x15` 1,66 Mo → **244 Ko**),
@@ -241,7 +246,7 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 
 ## Lancer le POC
 
-- Fichiers : `index.html` (UI + importmap CDN Three.js r169) + `viewer.js` (moteur monolithique) + `schema.json` (composition) + `offset.json` (décalages persistants) + `finishes.json` (finitions persistantes) + `clean-glb.sh` (nettoyage glb). Aucun build, aucune dépendance npm.
+- Fichiers : `index.html` (UI + importmap CDN Three.js r169) + `viewer.js` (moteur monolithique) + `schema.json` (composition) + `catalog.json` (registre composants) + `offset.json` (décalages persistants) + `finishes.json` (finitions persistantes) + `clean-glb.sh` (nettoyage glb). Aucun build, aucune dépendance npm.
 - **Live Server** sur `index.html` (clic droit → « Open with Live Server »). Il faut un serveur HTTP local : `fetch('./schema.json')`, `fetch('./offset.json')` et les `.glb` ne se chargent pas en `file://`.
 - UI : bascule **1·Audit composant** / **2·Composition** ; recharger/ouvrir un JSON ; toggle repères ; bouton **PNG transparent**.
 - Le moteur recopie les constantes de ce fichier (`S`, `CATALOG`, rôles/alias matières, finitions). **Ce CLAUDE.md reste la source de vérité** — toute correction de constante doit être répercutée dans `viewer.js`.

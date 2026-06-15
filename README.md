@@ -34,6 +34,7 @@ Three.js (r169) est chargé via importmap CDN.
 | `index.html` | UI + importmap Three.js |
 | `viewer.js` | moteur (monolithique) |
 | `schema.json` | composition d'exemple |
+| `catalog.json` | registre des composants (anchor, depthLayer, slots, expect) |
 | `offset.json` | décalages de placement par composant (mm), persistants |
 | `finishes.json` | finitions bois/métal + réglages texture, persistants |
 | `glb/` | composants **à faire** (exports SketchUp bruts) |

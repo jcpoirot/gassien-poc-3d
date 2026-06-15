@@ -6,8 +6,12 @@
 #   glb/        = composants À FAIRE (exports SketchUp bruts) — source par défaut
 #   glb/done/   = composants NETTOYÉS — utilisés par le viewer
 #
-# Usage :   ./clean-glb.sh                       # nettoie tous les glb/*.glb -> glb/done/
+# Usage :   ./clean-glb.sh                       # nettoie les glb/*.glb -> glb/done/
 #           ./clean-glb.sh glb/board40x15.glb    # un fichier précis
+#           FORCE=1 ./clean-glb.sh               # refait même ceux déjà à jour
+#
+# Un composant déjà présent et À JOUR dans glb/done/ (sortie pas plus ancienne que
+# la source) est IGNORÉ — pour ne pas tout refaire à chaque fois. FORCE=1 force.
 #
 # Fait, via @gltf-transform/cli (téléchargé à la demande par npx) :
 #   - prune  : retire accessors / matériaux / textures / NŒUDS VIDES orphelins
@@ -53,6 +57,13 @@ for SRC in "$@"; do
   NAME="$(basename "$SRC")"
   OUT="$OUTDIR/$NAME"
   BEFORE=$(wc -c < "$SRC")
+
+  # déjà nettoyé et à jour (sortie pas plus ancienne que la source) -> on saute.
+  # FORCE=1 ./clean-glb.sh pour tout refaire.
+  if [ -z "${FORCE:-}" ] && [ -f "$OUT" ] && [ ! "$SRC" -nt "$OUT" ]; then
+    echo "⏭  $NAME déjà dans $OUTDIR/ (à jour) — ignoré"
+    continue
+  fi
 
   echo "──────────────────────────────────────────────"
   echo "▶ $SRC"
