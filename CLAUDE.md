@@ -229,11 +229,13 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 4. **Supprimer scènes / onglets de vue** (sinon nœuds parasites `Scène 1` / `Active View` / `Rendu 3DW`) ; **purger** matériaux/composants inutilisés.
 5. Garder l'**origine au coin gauche-bas-arrière** ; nom de sortie = `type` du JSON.
 
-**Après export** — script `./clean-glb.sh glb/<fichier>.glb` (utilise `npx @gltf-transform/cli`) :
+**Dossiers** : `glb/` = composants **à faire** (exports bruts) ; `glb/done/` = composants **nettoyés**, **chargés par le viewer** (`GLB_DIR = 'glb/done/'`).
+
+**Après export** — script `./clean-glb.sh` (sans argument : nettoie tous les `glb/*.glb` ; utilise `npx @gltf-transform/cli`) :
 - `prune` (retire accessors/matériaux/**nœuds vides** orphelins) → nettoie les parasites,
 - `dedup` (fusionne dupliqués), `weld` (soude les sommets),
 - `resize` (**réduit les textures à 64 px**, surchargeable `MAXTEX=32`) → **les UV restent sur le maillage**, le poids chute (mesuré : `board40x15` 1,66 Mo → **244 Ko**),
-- écrit dans `glb/clean/`, logge taille avant/après.
+- lit les bruts dans `glb/`, écrit les nettoyés dans `glb/done/`, logge taille avant/après.
 
 **Contrôle final** : ouvrir le glb nettoyé dans le viewer (Mode 1 Audit) → section **« Conformité matières »** : tous les noms en `OK conforme`. Une texture bois (porteuse d'UV) est normale ; seul un nom non conforme est bloquant.
 

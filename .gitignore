@@ -4,9 +4,6 @@
 Icon
 Icon?
 
-# Sorties générées par clean-glb.sh
-glb/clean/
-
 # Config locale agent / éditeurs
 .claude/
 .vscode/

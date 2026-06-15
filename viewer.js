@@ -21,9 +21,12 @@ const TOL = 0.002; // tolérance d'audit bbox : 2 mm
 // appliqué APRÈS le calcul worldPosition. Origine .glb laissée telle quelle (coin
 // gauche-bas-arrière) ; on corrige le placement ici, type par type. Se calibre
 // visuellement via le panneau « Réglage décalage / grille » puis « Copier la table ».
+// Les composants chargés sont les .glb NETTOYÉS (sortie de clean-glb.sh -> glb/done/).
+const GLB_DIR = 'glb/done/';
+
 const CATALOG = {
   gridGF: {
-    glb: 'glb/gridGF.glb',
+    glb: GLB_DIR + 'gridGF.glb',
     slots: ['metal_structure'],
     anchor: 'bottom',
     depthLayer: 0,
@@ -31,7 +34,7 @@ const CATALOG = {
     expect: { sizeX: 0.800, sizeY: 0.770, sizeZ: 0.012 },
   },
   board40x15: {
-    glb: 'glb/board40x15.glb',
+    glb: GLB_DIR + 'board40x15.glb',
     slots: ['wood', 'metal_structure', 'metal_hardware'],
     anchor: 'bottom',
     depthLayer: 0.012,

@@ -2,8 +2,12 @@
 # =============================================================================
 # clean-glb.sh — nettoyage d'un .glb exporté depuis SketchUp
 #
-# Usage :   ./clean-glb.sh glb/board40x15.glb [glb/autre.glb ...]
-#           ./clean-glb.sh glb/*.glb
+# Convention dossiers :
+#   glb/        = composants À FAIRE (exports SketchUp bruts) — source par défaut
+#   glb/done/   = composants NETTOYÉS — utilisés par le viewer
+#
+# Usage :   ./clean-glb.sh                       # nettoie tous les glb/*.glb -> glb/done/
+#           ./clean-glb.sh glb/board40x15.glb    # un fichier précis
 #
 # Fait, via @gltf-transform/cli (téléchargé à la demande par npx) :
 #   - prune  : retire accessors / matériaux / textures / NŒUDS VIDES orphelins
@@ -15,14 +19,15 @@
 #              dans SketchUp : l'apparence des rôles pilotés est remplacée au
 #              runtime ; seules les UV (sens du fil bois) comptent, et elles
 #              vivent sur le maillage, pas sur l'image.
-# Écrit le résultat dans glb/clean/<nom>.glb et logge un rapport avant/après.
+# Écrit le résultat dans glb/done/<nom>.glb et logge un rapport avant/après.
 #
-# Régler la taille max des textures : MAXTEX=32 ./clean-glb.sh glb/x.glb
+# Régler la taille max des textures : MAXTEX=32 ./clean-glb.sh
 # =============================================================================
 set -euo pipefail
 
 GLTF="npx --yes @gltf-transform/cli"
-OUTDIR="glb/clean"
+SRCDIR="glb"
+OUTDIR="glb/done"
 MAXTEX="${MAXTEX:-64}"   # taille max (px) des textures après nettoyage
 mkdir -p "$OUTDIR"
 
@@ -35,8 +40,12 @@ human () { # taille lisible
   if command -v numfmt >/dev/null 2>&1; then numfmt --to=iec "$1"; else echo "${1}o"; fi
 }
 
+# Sans argument : nettoie tous les .glb du dossier source (glb/), pas ceux de glb/done/.
 if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 <fichier.glb> [autres.glb ...]"; exit 1
+  shopt -s nullglob
+  set -- "$SRCDIR"/*.glb
+  shopt -u nullglob
+  [ "$#" -gt 0 ] || { echo "Aucun .glb à nettoyer dans $SRCDIR/"; exit 0; }
 fi
 
 for SRC in "$@"; do

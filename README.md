@@ -36,9 +36,10 @@ Three.js (r169) est chargé via importmap CDN.
 | `schema.json` | composition d'exemple |
 | `offset.json` | décalages de placement par composant (mm), persistants |
 | `finishes.json` | finitions bois/métal + réglages texture, persistants |
-| `glb/` | composants `.glb` |
+| `glb/` | composants **à faire** (exports SketchUp bruts) |
+| `glb/done/` | composants **nettoyés**, chargés par le viewer |
 | `textures/` | textures bois (`oak_*`, `birch_*`, `wood_raw`) |
-| `clean-glb.sh` | nettoyage des `.glb` (prune/dedup/weld/resize via gltf-transform) |
+| `clean-glb.sh` | nettoyage `glb/` → `glb/done/` (prune/dedup/weld/resize via gltf-transform) |
 
 ## Conventions clés
 
@@ -49,7 +50,9 @@ Three.js (r169) est chargé via importmap CDN.
 
 ## Nettoyage des glb
 
+Place les exports SketchUp bruts dans `glb/`, puis :
+
 ```bash
-./clean-glb.sh glb/board40x15.glb      # → glb/clean/
-MAXTEX=32 ./clean-glb.sh glb/*.glb     # textures réduites à 32px
+./clean-glb.sh             # nettoie tous les glb/*.glb → glb/done/ (utilisés par le viewer)
+MAXTEX=32 ./clean-glb.sh   # idem, textures réduites à 32px
 ```
