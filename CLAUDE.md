@@ -48,9 +48,10 @@ Rôles canoniques (= nom exact à donner au matériau dans SketchUp) :
 |----------------------|---------------------------------------------------|----------------------------|
 | `wood_face`          | faces dessus/dessous (placage contreplaqué, plateau) | oui (`woodColor`)       |
 | `wood_edge`          | chants (contreplaqué)                             | oui (`woodColor`)          |
-| `wood_raw`           | bois brut (ex. tubes hêtre)                       | oui (`woodColor`)          |
+| `wood_raw`           | bois brut (ex. tubes hêtre)                       | **NON — texture wood_raw figée** |
 | `metal_structure`    | structure métal peinte                            | oui (`metalColor`)         |
 | `metal_hardware`     | visserie                                          | **NON — inox figé**        |
+| `glass`              | verre (vases, miroirs, vitrages)                  | **NON — transparent figé** |
 
 (`wood` générique encore toléré pour bois massif/compat.)
 
@@ -160,7 +161,7 @@ Chaque composant **déclare ses slots** : le moteur sait alors quoi piloter et q
 
 ## Finitions (swap au runtime) — implémenté
 
-Sélecteur **Finitions** en mode Composition (`index.html`/`viewer.js`) : applique en live une finition **bois** et **métal** sur la composition. `applyFinishes(model)` clone le matériau (jamais muter le partagé), pilote `wood*` via la finition bois et `metal_structure` via la finition métal ; `metal_hardware` jamais touché (inox figé).
+Sélecteur **Finitions** en mode Composition (`index.html`/`viewer.js`) : applique en live une finition **bois** et **métal** sur la composition. `applyFinishes(model)` clone le matériau (jamais muter le partagé), pilote `wood*` via la finition bois et `metal_structure` via la finition métal ; `metal_hardware` jamais touché (inox figé) ; `glass` → `MeshPhysicalMaterial` transparent (`makeGlassMaterial`, `transmission`), figé lui aussi.
 
 **Persistance** : `finishes.json` (racine) est chargé à l'init et **écrase** les défauts de `viewer.js` (`loadFinishes`). Workflow identique aux offsets : régler via sliders/sélecteurs → bouton **« Copier les finitions »** → coller dans `finishes.json`. Couleurs en hex.
 
@@ -169,8 +170,9 @@ Set de finitions (`WOOD_FINISHES` / `METAL_FINISHES`, surchargés par `finishes.
 **Bois** (`woodFinish`) :
 - **Chêne Massif** (`oak`) : maps par rôle `wood_face→oak_face.jpg`, `wood_edge→oak_edge.jpg`, `wood_raw→wood_raw.jpg` (face et tranche identiques).
 - **Bouleau CP** (`birch`) : `wood_face→birch_face.jpg`, `wood_edge→birch_edge.jpg`, `wood_raw→wood_raw.jpg` (face ≠ tranche).
-- **Noir**, **Blanc** : couleur unie sur tous les rôles bois.
+- **Noir**, **Blanc** : couleur unie sur les rôles bois (sauf `wood_raw`).
 - **Couleur perso** : sélecteur `Couleur bois`.
+- ⚠️ **`wood_raw` est FIGÉ** : toujours la texture `wood_raw.jpg` (params dédiés `WOOD_RAW` dans `viewer.js`), **jamais** affecté par la finition bois choisie. Le `wood_raw→...` des maps oak/birch ci-dessus est donc inutilisé (intercepté en amont).
 
 **Métal** (`metalFinish`) : **Noir**, **Blanc** (peinture, `metalness 0`, pas du chrome), **Laiton**, + **Couleur perso** (`Couleur métal`). Sliders live **Métallicité / Rugosité / Reflets env.** (`MET_SLIDERS`) par finition — calibrage visuel du reflet (les fils fins de grille vs crochets ne captent pas l'environnement de la même façon ; ⚠️ ce n'est PAS un bug de normales : après nettoyage les buffers sont entrelacés `byteStride`, normales OK). Persistés dans `finishes.json`.
 

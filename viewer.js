@@ -82,6 +82,7 @@ const CANONICAL_ROLES = [
   'wood',             // bois massif générique (toléré)
   'metal_structure',  // structure métal peinte (pilotable)
   'metal_hardware',   // visserie — inox FIGÉ
+  'glass',            // verre — transparent FIGÉ (vases, miroirs, vitrages)
 ];
 const WOOD_ROLES = ['wood_face', 'wood_edge', 'wood_raw', 'wood'];
 
@@ -108,8 +109,24 @@ const ROLE_DEBUG_COLOR = {
   wood_raw: 0xdcb579,
   metal_structure: 0x5b9bd5,
   metal_hardware: 0xc0c0c0,
+  glass: 0x9fd8e6,
   _none: 0xff3b6b, // matériau sans rôle => alerte visuelle
 };
+
+// Verre — matière FIGÉE (transparente). Construite à la volée (MeshPhysicalMaterial).
+const GLASS = { color: 0xeaf6fb, roughness: 0.05, transmission: 0.92, ior: 1.45, thickness: 0.004 };
+function makeGlassMaterial() {
+  return new THREE.MeshPhysicalMaterial({
+    color: GLASS.color,
+    metalness: 0,
+    roughness: GLASS.roughness,
+    transmission: GLASS.transmission, // verre réaliste (KHR_materials_transmission)
+    ior: GLASS.ior,
+    thickness: GLASS.thickness,
+    transparent: true,
+    envMapIntensity: 1,
+  });
+}
 
 // --- Finitions (set fixe) ---
 // Bois : finitions "texture" (maps par rôle face/edge/raw) ou "couleur" (unie).
@@ -155,8 +172,23 @@ function preloadTextures() {
   for (const f of WOOD_TEXTURE_FILES) getTexture('textures/' + f);
 }
 
+// wood_raw (tubes hêtre brut) : FIGÉ — toujours la texture wood_raw, jamais piloté
+// par la finition bois. Params dédiés et fixes.
+const WOOD_RAW = { map: 'wood_raw.jpg', repeat: 3.3, brightness: 0.45, roughness: 0.40, envIntensity: 0.4 };
+
 // Applique la finition bois courante à un matériau cloné, selon le rôle.
 function applyWoodFinish(m, role) {
+  if (role === 'wood_raw') { // figé : toujours wood_raw.jpg, indépendant de woodFinish
+    m.metalness = 0;
+    m.roughness = WOOD_RAW.roughness;
+    m.envMapIntensity = WOOD_RAW.envIntensity;
+    const tex = getTexture('textures/' + WOOD_RAW.map);
+    tex.repeat.set(WOOD_RAW.repeat, WOOD_RAW.repeat);
+    tex.needsUpdate = true;
+    m.map = tex;
+    m.color.setScalar(WOOD_RAW.brightness);
+    return;
+  }
   const p = woodFinish.params || DEFAULT_WOOD_PARAMS;
   m.metalness = 0;
   m.roughness = p.roughness;
@@ -372,6 +404,7 @@ function applyFinishes(object3d) {
     if (!o.isMesh || !o.material) return;
     const role = roleOfMaterial(o.material.name);
     if (!role || role === 'metal_hardware') return; // figé (inox)
+    if (role === 'glass') { o.material = makeGlassMaterial(); return; } // figé (verre)
     const m = o.material.clone(); // jamais muter un matériau partagé
     if (WOOD_ROLES.includes(role)) applyWoodFinish(m, role);
     else if (role === 'metal_structure') applyMetalFinish(m);
@@ -554,9 +587,12 @@ async function runAudit(type) {
         logHTML(`<span class="tag warn">TEXTURE</span><b>${name}</b> : texture inutile pour ce rôle (couleur unie attendue) — réduite au nettoyage.`);
       }
     }
-    // rappel visserie figée
+    // rappels matières figées
     if (e.role === 'metal_hardware') {
       logHTML(`<span class="tag info">FIGÉ</span><b>${name}</b> : metal_hardware = inox, jamais piloté`);
+    }
+    if (e.role === 'glass') {
+      logHTML(`<span class="tag info">FIGÉ</span><b>${name}</b> : glass = verre transparent, jamais piloté`);
     }
   }
   // Niveau basé sur le NOMMAGE seul : les textures sont gérées au nettoyage (resize).
