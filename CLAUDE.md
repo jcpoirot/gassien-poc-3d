@@ -254,6 +254,11 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 - Le moteur recopie les constantes de ce fichier (`S`, `CATALOG`, rôles/alias matières, finitions). **Ce CLAUDE.md reste la source de vérité** — toute correction de constante doit être répercutée dans `viewer.js`.
 - Découpage en modules ES (pour réutilisation dans `GassienCalculFront` React) prévu plus tard ; v1 volontairement monolithique.
 
+## Réutilisation dans l'admin (React + Ant Design)
+- **`gassien-viewer.js`** = moteur **framework-agnostic** extrait du POC (classe `GassienViewer`, **zéro UI**) : il prend un `<canvas>` + un `assetBaseUrl`, et **retourne des données** (audit/validation) au lieu d'écrire dans le DOM. C'est ce qu'on importe dans l'admin (Three.js en dépendance npm, plus d'importmap).
+- **`INTEGRATION.md`** = guide d'intégration (API, assets à servir en statique, formats de données, squelette React, pièges). Le Claude Code de l'admin câble l'UX Ant Design dessus.
+- `viewer.js` (POC) reste la **référence/démo** ; même logique que le moteur. Toute évolution de logique métier doit rester cohérente entre les deux (ou migrer le POC sur `gassien-viewer.js`).
+
 ## Ordre de travail recommandé
 1. Mode 1 (audit) sur `gridGF` + `board40x15` → fiabiliser origines/échelle/rôles. ✅ origines/échelle/rôles confirmés (2026-06-05).
 2. Résoudre les 3 problèmes connus de placement.
