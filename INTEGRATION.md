@@ -96,6 +96,8 @@ viewer.getOffsets();                            // table complète (à persister
 viewer.setHelpersVisible(false);                // masquer les repères de validation
 const pngBlob = await viewer.snapshotPNG();     // PNG fond transparent, sans repères
 const glbBlob = await viewer.exportGLB();       // GLB de la compo (objets + finitions)
+await viewer.copyPNGToClipboard();              // copie le PNG dans le presse-papier
+viewer.compositionName();                       // slug du titre (ex. 'ma-compo') pour nommer le download
 ```
 
 ### Cycle de vie
@@ -125,7 +127,9 @@ viewer.dispose();   // OBLIGATOIRE au démontage React (libère WebGL, listeners
 { elementCount, gridCount,
   elements: [ { id, type, footprint:{w,h}, bbox:{w,h,d}, footprintDelta:{w,h},
                overhang:{L,R,T,B}|null } ],   // débord vs grille en mètres (0 si dans la grille)
-  errors: [ "Type absent du CATALOG : …" ] }
+  errors: [ "Type absent du CATALOG : …" ],
+  unknownTypes: [ "…" ],   // types absents du catalogue (→ bannière d'avertissement, cf. §7)
+  missingGlb:   [ "…" ] }  // dans le catalogue mais glb non chargeable
 ```
 
 **Retour `audit`** :
@@ -191,3 +195,44 @@ Boutons AntD → `viewer.snapshotPNG()` / `viewer.exportGLB()` (déclenche un do
   glb doivent être nommés par rôle (`wood_face`/`wood_edge`/`wood_raw`/`metal_structure`/
   `metal_hardware`/`glass`). L'audit signale les non-conformités.
 - Les **constantes/conventions** (échelle `S`, rôles, placement) sont documentées dans `CLAUDE.md`.
+
+---
+
+## 7. UX attendue côté Maker (admin)
+
+Points demandés, et comment les réaliser avec le moteur :
+
+1. **Changer une couleur ne réinitialise PAS la vue** — déjà géré : `setWoodFinish` /
+   `setMetalFinish` / `setWoodParams` / `setMetalParams` **ré-appliquent les matériaux sur
+   place** (pas de rebuild, caméra figée). Rien à faire côté admin.
+
+2. **Légende des raccourcis clavier (en bas à gauche du viewer)** — à afficher par l'admin
+   (le moteur gère les touches ; l'admin montre la légende) :
+   > Glisser = rotation · Molette = zoom · **H** ou **Espace** + glisser = panoramique
+   (Les flèches/PgUp/PgDn servent au calibrage des décalages — à n'exposer qu'en mode admin/validation.)
+
+3. **Copier l'image dans le presse-papier** — bouton AntD →
+   ```js
+   await viewer.copyPNGToClipboard();   // ou : const b = await viewer.snapshotPNG();
+                                         //       navigator.clipboard.write([new ClipboardItem({'image/png': b})])
+   ```
+   (Nécessite un contexte sécurisé : https ou localhost.)
+
+4. **Nom du fichier PNG/GLB = titre de la composition** — le moteur retourne un Blob ; l'admin
+   nomme le download :
+   ```js
+   const blob = await viewer.snapshotPNG();        // ou exportGLB()
+   const a = Object.assign(document.createElement('a'),
+     { href: URL.createObjectURL(blob), download: viewer.compositionName() + '.png' });
+   a.click();
+   ```
+   `compositionName()` = slug de `schema.data.title` (sinon `'composition'`). Helper `slugify` aussi exporté.
+
+5. **Avertissement si un composant n'est pas au catalogue, à l'ouverture du 3D** — `loadComposition`
+   retourne `unknownTypes` (et `missingGlb`). Affiche une **bannière AntD** (`<Alert type="warning">`)
+   si non vide :
+   ```js
+   const rep = await viewer.loadComposition(schema);
+   if (rep.unknownTypes.length) showWarning(`Composants non modélisés : ${rep.unknownTypes.join(', ')}`);
+   ```
+   Ces composants ne sont pas affichés en 3D (le reste de la compo l'est).

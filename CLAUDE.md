@@ -248,16 +248,14 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 
 ## Lancer le POC
 
-- Fichiers : `index.html` (UI + importmap CDN Three.js r169) + `viewer.js` (moteur monolithique) + `schema.json` (composition) + `catalog.json` (registre composants) + `offset.json` (décalages persistants) + `finishes.json` (finitions persistantes) + `clean-glb.sh` (nettoyage glb). Aucun build, aucune dépendance npm.
+- Fichiers : `index.html` (UI + importmap CDN Three.js r169) + `gassien-viewer.js` (**le moteur**, classe `GassienViewer`) + `viewer.js` (**couche UI du POC** qui consomme le moteur) + `schema.json` (composition) + `catalog.json` (registre composants) + `offset.json` (décalages persistants) + `finishes.json` (finitions persistantes) + `clean-glb.sh` (nettoyage glb). Aucun build, aucune dépendance npm.
 - **Live Server** sur `index.html` (clic droit → « Open with Live Server »). Il faut un serveur HTTP local : `fetch('./schema.json')`, `fetch('./offset.json')` et les `.glb` ne se chargent pas en `file://`.
 - UI : bascule **1·Audit composant** / **2·Composition** ; recharger/ouvrir un JSON ; toggle repères ; bouton **PNG transparent**.
-- Le moteur recopie les constantes de ce fichier (`S`, `CATALOG`, rôles/alias matières, finitions). **Ce CLAUDE.md reste la source de vérité** — toute correction de constante doit être répercutée dans `viewer.js`.
-- Découpage en modules ES (pour réutilisation dans `GassienCalculFront` React) prévu plus tard ; v1 volontairement monolithique.
+- Les constantes/conventions de ce fichier (`S`, `CATALOG`, rôles/alias matières, finitions) vivent dans **`gassien-viewer.js`** (le moteur). **Ce CLAUDE.md reste la source de vérité** — toute correction de constante doit être répercutée dans `gassien-viewer.js`.
 
 ## Réutilisation dans l'admin (React + Ant Design)
 - **`gassien-viewer.js`** = moteur **framework-agnostic** extrait du POC (classe `GassienViewer`, **zéro UI**) : il prend un `<canvas>` + un `assetBaseUrl`, et **retourne des données** (audit/validation) au lieu d'écrire dans le DOM. C'est ce qu'on importe dans l'admin (Three.js en dépendance npm, plus d'importmap).
 - **`INTEGRATION.md`** = guide d'intégration (API, assets à servir en statique, formats de données, squelette React, pièges). Le Claude Code de l'admin câble l'UX Ant Design dessus.
-
 ### ⭐ Source de vérité & synchro avec l'admin
 - **`gassien-viewer.js` (ce repo) = LE moteur canonique.** C'est le SEUL fichier copié dans l'admin :
   `gassienCalculFront/src/components/maker/global/three/gassien-viewer.js`.
@@ -267,7 +265,7 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
   ```
   Côté admin, on n'édite ce fichier directement **que** pour de l'intégration React ponctuelle (à éviter — sinon ça re-diverge).
 - **État (2026-06) backporté depuis l'admin** : cadrage **aspect-aware** (`_frameBox` tient compte du ratio largeur/hauteur ; `frame(margin)` ; `resize()` avant cadrage), **cadre bleu (bounding box) piloté** (`_bboxWanted`, `setBoundingBoxVisible()`, masqué par défaut indépendamment des `helpers`), `getDimensions()`, et masquage du cadre pendant snapshot/export.
-- ⚠️ **`viewer.js` (la démo procédurale lancée par `index.html`) NE partage PAS le code** de `gassien-viewer.js` (structure monolithique différente). Les évolutions ci-dessus **n'y sont pas répercutées** : la démo `index.html` ne reflète donc pas le comportement moteur à jour. Pour tester le moteur canonique de façon isolée, prévoir une petite page chargeant `gassien-viewer.js` directement (TODO harness), ou tester côté admin.
+- ✅ **`viewer.js` (POC) CONSOMME `gassien-viewer.js`** (recâblé 2026-06) : c'est une **pure couche UI** (câblage du panneau `index.html` + rendu des données audit/validation dans le log). **Plus de divergence** : le POC (Live Server) est le **banc de test vivant** du moteur canonique. Les évolutions backportées ci-dessus sont donc bien reflétées dans la démo. (Ajouts POC côté moteur : finitions par **référence** pour persistance sliders, `setOffset()` renvoie le rapport de validation, `serializeFinishes()`, `unknownTypes` dans `loadComposition`, `copyPNGToClipboard()`, `compositionName()`/`slugify`.)
 
 ## Ordre de travail recommandé
 1. Mode 1 (audit) sur `gridGF` + `board40x15` → fiabiliser origines/échelle/rôles. ✅ origines/échelle/rôles confirmés (2026-06-05).

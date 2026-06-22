@@ -41,8 +41,9 @@ Three.js (r169) est chargé via importmap CDN.
 | `glb/done/` | composants **nettoyés**, chargés par le viewer |
 | `textures/` | textures bois (`oak_*`, `birch_*`, `wood_raw`) |
 | `clean-glb.sh` | nettoyage `glb/` → `glb/done/` (prune/dedup/weld/resize via gltf-transform) |
-| `gassien-viewer.js` | **moteur réutilisable** (classe `GassienViewer`, framework-agnostic) pour l'admin React |
+| `gassien-viewer.js` | **moteur réutilisable** (classe `GassienViewer`, framework-agnostic) — source unique de la logique 3D ; le POC le consomme |
 | `INTEGRATION.md` | guide d'intégration du moteur dans l'admin (React + Ant Design) |
+| `EVOLUTIONS.md` | checklist : que fournir au POC pour chaque type d'évolution (composant, finition, rôle…) |
 
 ## Conventions clés
 

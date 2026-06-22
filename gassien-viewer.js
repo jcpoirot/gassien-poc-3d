@@ -93,6 +93,14 @@ function namingStatus(name) {
 const hexToInt = (hex) => (typeof hex === 'string' ? parseInt(hex.replace('#', ''), 16) : hex);
 const intToHex = (n) => '#' + (n >>> 0).toString(16).padStart(6, '0');
 
+// Nom de fichier sûr à partir d'un titre (accents retirés, espaces -> tirets).
+export function slugify(s, fallback = 'composition') {
+  const slug = (s || '').trim().toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || fallback;
+}
+
 // =============================================================================
 // GassienViewer
 // =============================================================================
@@ -121,8 +129,9 @@ export class GassienViewer {
     this.offsets = {};
     this.woodFinishes = JSON.parse(JSON.stringify(DEFAULT_WOOD_FINISHES));
     this.metalFinishes = JSON.parse(JSON.stringify(DEFAULT_METAL_FINISHES));
-    this.woodFinish = { ...this.woodFinishes.black };
-    this.metalFinish = { ...this.metalFinishes.black };
+    // finition active = RÉFÉRENCE vers l'entrée du registre (les réglages sliders y persistent)
+    this.woodFinish = this.woodFinishes.black;
+    this.metalFinish = this.metalFinishes.black;
 
     this._glbCache = new Map();
     this._texCache = new Map();
@@ -143,8 +152,8 @@ export class GassienViewer {
   // --- init : charge la config + précharge les textures ---
   async init() {
     await Promise.all([this._loadCatalog(), this._loadOffsets(), this._loadFinishes()]);
-    this.woodFinish = { ...(this.woodFinishes[this._defaultFinish.wood] || this.woodFinishes.black) };
-    this.metalFinish = { ...(this.metalFinishes[this._defaultFinish.metal] || this.metalFinishes.black) };
+    this.woodFinish = this.woodFinishes[this._defaultFinish.wood] || this.woodFinishes.black;
+    this.metalFinish = this.metalFinishes[this._defaultFinish.metal] || this.metalFinishes.black;
     this._preloadTextures();
     return this;
   }
@@ -533,6 +542,7 @@ export class GassienViewer {
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 16), new THREE.MeshBasicMaterial({ color }));
     s.position.copy(pos);
     s.userData.helper = true;
+    s.visible = this._helpersWanted;
     this.content.add(s);
   }
 
@@ -563,11 +573,13 @@ export class GassienViewer {
     const placed = [];
     const gridBoxes = [];
     const errors = [];
+    const unknownTypes = new Set();   // types absents du catalogue
+    const missingGlb = new Set();     // dans le catalogue mais glb non chargeable
 
     for (const el of data.elements) {
       const def = this.catalog[el.type];
-      if (!def) { errors.push(`Type absent du CATALOG : ${el.type}`); continue; }
-      if (!this._glbCache.has(el.type)) { errors.push(`Template non chargé : ${el.type}`); continue; }
+      if (!def) { errors.push(`Type absent du CATALOG : ${el.type}`); unknownTypes.add(el.type); continue; }
+      if (!this._glbCache.has(el.type)) { errors.push(`Template non chargé : ${el.type}`); missingGlb.add(el.type); continue; }
       const model = this._glbCache.get(el.type).clone(true);
       const { size } = this._measure(model);
       const meta = { ...def, runtimeSizeY: size.y, offset: this.getOffset(el.type) };
@@ -605,36 +617,62 @@ export class GassienViewer {
       const gb = new THREE.Box3().setFromObject(this.content);
       const helper = new THREE.Box3Helper(gb, new THREE.Color(0x6ab0ff));
       helper.userData.bbox = true;       // cadre bleu (piloté par setBoundingBoxVisible)
-      helper.visible = this._bboxWanted;  // masqué par défaut (helpers:false)
+      helper.visible = this._bboxWanted;  // masqué par défaut, découplé des repères
       this.content.add(helper);
       if (refit) this._frameBox(gb);
     }
-    return { elementCount: data.elements.length, gridCount: gridBoxes.length, elements, errors };
+    return {
+      elementCount: data.elements.length, gridCount: gridBoxes.length, elements, errors,
+      unknownTypes: [...unknownTypes], missingGlb: [...missingGlb],
+    };
   }
 
   // --- Finitions (pilotage) ---
   getWoodFinishes() { return this.woodFinishes; }
   getMetalFinishes() { return this.metalFinishes; }
 
-  /** spec : clé ('oak'…) ou { color:'#rrggbb' } pour une couleur perso. */
+  // Ré-applique les finitions aux objets DÉJÀ placés (sans rebuild ni recadrage).
+  // -> un changement de couleur/finition ne réinitialise PAS la vue (caméra figée).
+  _reapplyFinishes() { this._applyFinishes(this.content); }
+
+  // spec : clé ('oak'…) -> référence le registre (les sliders y persistent),
+  // ou { color:'#rrggbb' } -> finition perso (objet à part).
   setWoodFinish(spec) {
-    if (typeof spec === 'string' && this.woodFinishes[spec]) this.woodFinish = { ...this.woodFinishes[spec] };
+    if (typeof spec === 'string' && this.woodFinishes[spec]) this.woodFinish = this.woodFinishes[spec];
     else if (spec && spec.color !== undefined) this.woodFinish = { color: hexToInt(spec.color), label: 'perso', params: { ...DEFAULT_WOOD_PARAMS } };
-    if (this.currentSchema) this._place(false);
+    if (this.currentSchema) this._reapplyFinishes();
   }
   setMetalFinish(spec) {
-    if (typeof spec === 'string' && this.metalFinishes[spec]) this.metalFinish = { ...this.metalFinishes[spec] };
+    if (typeof spec === 'string' && this.metalFinishes[spec]) this.metalFinish = this.metalFinishes[spec];
     else if (spec && spec.color !== undefined) this.metalFinish = { color: hexToInt(spec.color), metalness: 0.6, roughness: 0.5, envIntensity: 1, label: 'perso' };
-    if (this.currentSchema) this._place(false);
+    if (this.currentSchema) this._reapplyFinishes();
   }
   /** Ajuste les params de la finition bois active (repeat/brightness/roughness/envIntensity). */
   setWoodParams(partial) {
-    this.woodFinish.params = { ...(this.woodFinish.params || DEFAULT_WOOD_PARAMS), ...partial };
-    if (this.currentSchema) this._place(false);
+    if (!this.woodFinish.params) this.woodFinish.params = { ...DEFAULT_WOOD_PARAMS };
+    Object.assign(this.woodFinish.params, partial); // mutation -> persiste dans le registre
+    if (this.currentSchema) this._reapplyFinishes();
   }
   setMetalParams(partial) {
-    Object.assign(this.metalFinish, partial);
-    if (this.currentSchema) this._place(false);
+    Object.assign(this.metalFinish, partial); // mutation -> persiste dans le registre
+    if (this.currentSchema) this._reapplyFinishes();
+  }
+
+  /** État courant des finitions au format finishes.json (couleurs en hex). */
+  serializeFinishes() {
+    const wood = {};
+    for (const [k, f] of Object.entries(this.woodFinishes)) {
+      const o = { label: f.label };
+      if (f.maps) o.maps = { ...f.maps };
+      if (f.color !== undefined) o.color = intToHex(f.color);
+      o.params = { ...f.params };
+      wood[k] = o;
+    }
+    const metal = {};
+    for (const [k, f] of Object.entries(this.metalFinishes)) {
+      metal[k] = { label: f.label, color: intToHex(f.color), metalness: f.metalness, roughness: f.roughness, envIntensity: f.envIntensity ?? 1 };
+    }
+    return { wood, metal };
   }
 
   // --- Offsets (calibration de placement) ---
@@ -642,9 +680,10 @@ export class GassienViewer {
     if (!this.offsets[type]) this.offsets[type] = { x: 0, y: 0, z: 0 };
     return this.offsets[type];
   }
+  /** @returns le rapport de validation re-calculé (ou null), pour rafraîchir l'UI. */
   setOffset(type, xyz) {
     this.offsets[type] = { x: 0, y: 0, z: 0, ...xyz };
-    if (this.currentSchema) this._place(false);
+    return this.currentSchema ? this._place(false) : null;
   }
   getOffsets() { return this.offsets; }
   getCatalog() { return this.catalog; }
@@ -695,6 +734,16 @@ export class GassienViewer {
       }, 'image/png');
     });
   }
+
+  /** Rend le PNG (sans repères) et le copie dans le presse-papier. @returns {Promise<Blob>} */
+  async copyPNGToClipboard(opts) {
+    const blob = await this.snapshotPNG(opts);
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return blob;
+  }
+
+  /** Nom de fichier (slug) basé sur le titre de la composition courante. */
+  compositionName() { return slugify(this.currentSchema?.data?.title); }
 
   /** Composition (objets + finitions) en .glb binaire, sans repères. @returns {Promise<Blob>} */
   exportGLB() {

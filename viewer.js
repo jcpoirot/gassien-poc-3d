@@ -1,461 +1,29 @@
 // =============================================================================
-// Gassien — Viewer 3D (POC)
-// Moteur Three.js de visualisation/validation des compositions.
-// Monolithique volontairement (cf. plan) ; sera découpé en modules pour React.
-// Source de vérité des constantes : CLAUDE.md
+// Gassien — Viewer 3D (POC) — couche UI
+//
+// Le POC consomme désormais LE MÊME moteur que l'admin : `GassienViewer`
+// (gassien-viewer.js). Ce fichier ne contient QUE l'UI : il câble le panneau
+// d'index.html sur l'API du moteur et rend les données retournées (audit /
+// validation) dans le log. Toute la logique 3D est dans le moteur (source unique).
 // =============================================================================
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GassienViewer, intToHex, hexToInt } from './gassien-viewer.js';
 
-// -----------------------------------------------------------------------------
-// Constantes (validées en session — cf. CLAUDE.md)
-// -----------------------------------------------------------------------------
-const S = 0.0025; // m / unité configurateur (constante unique validée)
-const TOL = 0.002; // tolérance d'audit bbox : 2 mm
-
-// type -> asset + métadonnées validées
-// `offset` = décalage de placement EN MILLIMÈTRES (x: droite+, y: haut+, z: avant+),
-// appliqué APRÈS le calcul worldPosition. Origine .glb laissée telle quelle (coin
-// gauche-bas-arrière) ; on corrige le placement ici, type par type. Se calibre
-// visuellement via le panneau « Réglage décalage / grille » puis « Copier la table ».
-// Les composants chargés sont les .glb NETTOYÉS (sortie de clean-glb.sh -> glb/done/).
-const GLB_DIR = 'glb/done/';
-
-const CATALOG = {
-  gridGF: {
-    glb: GLB_DIR + 'gridGF.glb',
-    slots: ['metal_structure'],
-    anchor: 'bottom',
-    depthLayer: 0,
-    offset: { x: 0, y: 0, z: 0 },
-    expect: { sizeX: 0.800, sizeY: 0.770, sizeZ: 0.012 },
-  },
-  board40x15: {
-    glb: GLB_DIR + 'board40x15.glb',
-    slots: ['wood', 'metal_structure', 'metal_hardware'],
-    anchor: 'bottom',
-    depthLayer: 0.012,
-    offset: { x: 0, y: 0, z: 0 },
-    expect: { sizeX: 0.400, sizeY: 0.121, sizeZ: 0.161 },
-  },
-};
-
-// Décalages "live" (mm). Seed depuis le CATALOG puis ÉCRASÉ par offset.json (init).
-// offset.json est la source de vérité persistante (tous les composants y figurent).
-const OFFSETS = {};
-for (const [type, def] of Object.entries(CATALOG)) {
-  OFFSETS[type] = { ...(def.offset || { x: 0, y: 0, z: 0 }) };
-}
-
-function ensureOffset(type) {
-  if (!OFFSETS[type]) OFFSETS[type] = { x: 0, y: 0, z: 0 };
-  return OFFSETS[type];
-}
-
-// Charge offset.json et fusionne dans OFFSETS (clés "_*" ignorées).
-async function loadOffsets() {
-  try {
-    const res = await fetch('./offset.json');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    for (const [type, o] of Object.entries(data)) {
-      if (type.startsWith('_') || !o || typeof o !== 'object') continue;
-      OFFSETS[type] = { x: +o.x || 0, y: +o.y || 0, z: +o.z || 0 };
-    }
-  } catch (e) {
-    console.warn('offset.json non chargé (valeurs par défaut utilisées) :', e.message);
-  }
-}
-
-// --- Convention de nommage des matières ---
-// STRATÉGIE : dans SketchUp, le NOM du matériau == son RÔLE (couleur plate, sans
-// texture). Le moteur pilote la finition au runtime selon ce nom. Pas de table de
-// traduction à maintenir pour les nouveaux glb : nom == rôle (identité).
-const CANONICAL_ROLES = [
-  'wood_face',        // faces dessus/dessous (placage contreplaqué, plateau)
-  'wood_edge',        // chants (contreplaqué)
-  'wood_raw',         // bois brut (ex. tubes hêtre)
-  'wood',             // bois massif générique (toléré)
-  'metal_structure',  // structure métal peinte (pilotable)
-  'metal_hardware',   // visserie — inox FIGÉ
-  'glass',            // verre — transparent FIGÉ (vases, miroirs, vitrages)
-];
-const WOOD_ROLES = ['wood_face', 'wood_edge', 'wood_raw', 'wood'];
-
-// Alias hérités : anciens noms (apparence) des glb actuels -> rôle. À RENOMMER
-// dans SketchUp ; gardés pour que les glb existants marchent pendant la transition.
-const LEGACY_ALIASES = {
-  'GASSIEN - Solid Oak': 'wood_face',
-  '[Color M09]': 'metal_structure',
-  '*1': 'metal_structure',
-  '[Steel Brushed Stainless]': 'metal_hardware',
-};
-
-// Résout un nom de matériau -> rôle (canonique d'abord, puis alias hérité).
-function roleOfMaterial(name) {
-  if (CANONICAL_ROLES.includes(name)) return name;
-  return LEGACY_ALIASES[name] || null;
-}
-
-// Couleur de debug par rôle (vue Audit colorée par slot)
-const ROLE_DEBUG_COLOR = {
-  wood: 0xc98a3c,
-  wood_face: 0xc98a3c,
-  wood_edge: 0x8a5a2b,
-  wood_raw: 0xdcb579,
-  metal_structure: 0x5b9bd5,
-  metal_hardware: 0xc0c0c0,
-  glass: 0x9fd8e6,
-  _none: 0xff3b6b, // matériau sans rôle => alerte visuelle
-};
-
-// Verre — matière FIGÉE (transparente). Construite à la volée (MeshPhysicalMaterial).
-const GLASS = { color: 0xeaf6fb, roughness: 0.05, transmission: 0.92, ior: 1.45, thickness: 0.004 };
-function makeGlassMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: GLASS.color,
-    metalness: 0,
-    roughness: GLASS.roughness,
-    transmission: GLASS.transmission, // verre réaliste (KHR_materials_transmission)
-    ior: GLASS.ior,
-    thickness: GLASS.thickness,
-    transparent: true,
-    envMapIntensity: 1,
-  });
-}
-
-// --- Finitions (set fixe) ---
-// Bois : finitions "texture" (maps par rôle face/edge/raw) ou "couleur" (unie).
-//   wood_raw utilise toujours wood_raw.jpg ; les rôles inconnus retombent sur wood_face.
-// params (par essence) : { repeat, brightness, roughness, envIntensity } — réglés via sliders.
-const WOOD_FINISHES = {
-  oak:   { label: 'Chêne Massif', maps: { wood_face: 'oak_face.jpg',   wood_edge: 'oak_edge.jpg',   wood_raw: 'wood_raw.jpg' }, params: { repeat: 3.3, brightness: 0.45, roughness: 0.50, envIntensity: 0.4 } },
-  birch: { label: 'Bouleau CP',   maps: { wood_face: 'birch_face.jpg', wood_edge: 'birch_edge.jpg', wood_raw: 'wood_raw.jpg' }, params: { repeat: 5.9, brightness: 0.45, roughness: 0.25, envIntensity: 0.4 } },
-  black: { label: 'Noir',         color: 0x111111, params: { repeat: 1, brightness: 1, roughness: 0.50, envIntensity: 1 } },
-  white: { label: 'Blanc',        color: 0xeaeaea, params: { repeat: 1, brightness: 1, roughness: 0.60, envIntensity: 1 } },
-};
-const DEFAULT_WOOD_PARAMS = { repeat: 1, brightness: 1, roughness: 0.6, envIntensity: 1 };
-const METAL_FINISHES = {
-  black: { label: 'Noir',   color: 0x141414, metalness: 0, roughness: 0.5, envIntensity: 1 }, // peinture diélectrique
-  white: { label: 'Blanc',  color: 0xf0f0f0, metalness: 0, roughness: 0.5, envIntensity: 1 }, // peinture diélectrique
-  brass: { label: 'Laiton', color: 0xc2a86e, metalness: 0.85, roughness: 0.5, envIntensity: 1 }, // satiné/mat (cf. réf.)
-};
-
-// Toutes les images bois à précharger à l'init.
-const WOOD_TEXTURE_FILES = ['oak_face.jpg', 'oak_edge.jpg', 'birch_face.jpg', 'birch_edge.jpg', 'wood_raw.jpg'];
-
-// Finitions "actives" (def objet). Initialisées depuis le JSON, modifiées par l'UI.
-//  bois : { maps:{role->file}, roughness } | { color, roughness }
-//  métal: { color, metalness, roughness, label }
-let woodFinish = { ...WOOD_FINISHES.black };
-let metalFinish = { ...METAL_FINISHES.black };
-
-// Cache de textures (path -> THREE.Texture), config albédo correcte.
-const texCache = new Map();
-const texLoader = new THREE.TextureLoader();
-function getTexture(path) {
-  if (texCache.has(path)) return texCache.get(path);
-  const tex = texLoader.load(path, undefined, undefined, () => console.warn('Texture introuvable :', path));
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  texCache.set(path, tex);
-  return tex;
-}
-
-// Précharge les textures bois à l'initialisation.
-function preloadTextures() {
-  for (const f of WOOD_TEXTURE_FILES) getTexture('textures/' + f);
-}
-
-// wood_raw (tubes hêtre brut) : FIGÉ — toujours la texture wood_raw, jamais piloté
-// par la finition bois. Params dédiés et fixes.
-const WOOD_RAW = { map: 'wood_raw.jpg', repeat: 3.3, brightness: 0.45, roughness: 0.40, envIntensity: 0.4 };
-
-// Applique la finition bois courante à un matériau cloné, selon le rôle.
-function applyWoodFinish(m, role) {
-  if (role === 'wood_raw') { // figé : toujours wood_raw.jpg, indépendant de woodFinish
-    m.metalness = 0;
-    m.roughness = WOOD_RAW.roughness;
-    m.envMapIntensity = WOOD_RAW.envIntensity;
-    const tex = getTexture('textures/' + WOOD_RAW.map);
-    tex.repeat.set(WOOD_RAW.repeat, WOOD_RAW.repeat);
-    tex.needsUpdate = true;
-    m.map = tex;
-    m.color.setScalar(WOOD_RAW.brightness);
-    return;
-  }
-  const p = woodFinish.params || DEFAULT_WOOD_PARAMS;
-  m.metalness = 0;
-  m.roughness = p.roughness;
-  m.envMapIntensity = p.envIntensity;
-  if (woodFinish.maps) {
-    const file = woodFinish.maps[role] || woodFinish.maps.wood_face;
-    const tex = getTexture('textures/' + file);
-    tex.repeat.set(p.repeat, p.repeat);
-    tex.needsUpdate = true;
-    m.map = tex;
-    m.color.setScalar(p.brightness); // multiplie l'albédo (assombrit si <1)
-  } else {
-    m.map = null;
-    m.color.set(woodFinish.color); // finition couleur unie : pas de luminosité texture
-  }
-}
-
-function applyMetalFinish(m) {
-  m.map = null;
-  m.color.set(metalFinish.color);
-  m.metalness = metalFinish.metalness ?? 1;
-  m.roughness = metalFinish.roughness ?? 0.4;
-  m.envMapIntensity = metalFinish.envIntensity ?? 1;
-}
-
-// =============================================================================
-// Scène / renderer
-// =============================================================================
 const canvas = document.getElementById('canvas');
-const stage = document.getElementById('stage');
 
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  alpha: true,
-  preserveDrawingBuffer: true, // requis pour le snapshot PNG
-});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x000000, 0); // fond transparent
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
-
-const scene = new THREE.Scene();
-
-// Environnement studio (PMREM) pour éclairage diffus + reflets métal
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-
-const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
-camera.position.set(0.9, 0.7, 1.4);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.screenSpacePanning = true; // pan vertical/horizontal dans le plan écran
-// boutons : gauche=rotation, droit=panoramique, milieu=zoom (défaut)
-controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-
-// Panoramique style SketchUp (outil « H ») : maintenir Espace ou H + glisser = pan.
-let panKeyHeld = false;
-window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if ((e.code === 'Space' || e.key === 'h' || e.key === 'H') && !panKeyHeld) {
-    panKeyHeld = true;
-    controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
-    renderer.domElement.style.cursor = 'grab';
-    e.preventDefault();
-  }
-});
-window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space' || e.key === 'h' || e.key === 'H') {
-    panKeyHeld = false;
-    controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-    renderer.domElement.style.cursor = '';
-  }
+// Le moteur (helpers ON = repères de validation ; finition d'affichage Bouleau/Noir).
+const viewer = new GassienViewer(canvas, {
+  assetBaseUrl: './',
+  helpers: true,
+  defaultFinish: { wood: 'birch', metal: 'black' },
 });
 
-// Lumière d'appoint douce (l'essentiel vient de l'environnement)
-const key = new THREE.DirectionalLight(0xffffff, 1.2);
-key.position.set(1.5, 2, 2.5);
-scene.add(key);
-scene.add(new THREE.AmbientLight(0xffffff, 0.15));
-
-// -----------------------------------------------------------------------------
-// Helpers de repère (axes monde, plan du mur Z=0, sol)
-// -----------------------------------------------------------------------------
-const helpers = new THREE.Group();
-scene.add(helpers);
-
-const axes = new THREE.AxesHelper(0.25); // rouge=X, vert=Y, bleu=Z
-helpers.add(axes);
-
-// Plan du mur à Z = 0 (face arrière de la composition)
-const wallGeo = new THREE.PlaneGeometry(2, 2);
-const wallMat = new THREE.MeshBasicMaterial({
-  color: 0x6ab0ff, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false,
-});
-const wall = new THREE.Mesh(wallGeo, wallMat);
-wall.position.set(0, 0.5, 0); // centré, posé devant le repère
-helpers.add(wall);
-
-// Grille de sol (plan XZ à Y=0)
-const grid = new THREE.GridHelper(2, 20, 0x4a5560, 0x33373d);
-grid.position.y = 0;
-helpers.add(grid);
-
-let helpersVisible = true;
-
 // =============================================================================
-// Chargement GLB (cache par type + clone)
-// =============================================================================
-const loader = new GLTFLoader();
-const glbCache = new Map(); // type -> gltf.scene (template, non ajouté à la scène)
-
-// Chemin du glb : depuis le CATALOG si défini, sinon glb/done/<type>.glb.
-function glbPathOf(type) {
-  return CATALOG[type]?.glb || (GLB_DIR + type + '.glb');
-}
-
-// Charge catalog.json (métadonnées de placement/validation) et complète le CATALOG.
-async function loadCatalog() {
-  try {
-    const res = await fetch('./catalog.json');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    for (const [type, o] of Object.entries(data)) {
-      if (type.startsWith('_') || !o) continue;
-      CATALOG[type] = {
-        ...(CATALOG[type] || {}),
-        glb: glbPathOf(type),
-        anchor: o.anchor || 'bottom',
-        depthLayer: o.depthLayer ?? 0,
-        slots: o.slots || [],
-        expect: o.expect || undefined, // null/absent => audit informatif
-      };
-    }
-  } catch (e) {
-    console.warn('catalog.json non chargé (CATALOG par défaut utilisé) :', e.message);
-  }
-}
-
-async function loadTemplate(type) {
-  if (glbCache.has(type)) return glbCache.get(type);
-  const gltf = await loader.loadAsync(glbPathOf(type));
-  glbCache.set(type, gltf.scene);
-  return gltf.scene;
-}
-
-function instanceOf(type) {
-  // clone profond pour les composants répétés ; matériaux clonés à l'application finition
-  return glbCache.get(type).clone(true);
-}
-
-// Groupe contenant tout ce qui est "contenu" (à vider entre les rendus)
-const content = new THREE.Group();
-scene.add(content);
-
-function clearContent() {
-  // NB : les clones partagent géométries ET matériaux avec le template en cache
-  // (THREE clone() copie par référence). On ne dispose donc PAS ici — sinon on
-  // casserait le template réutilisé. Seuls les matériaux clonés en finition et
-  // les géométries de marqueurs/box-helper fuient légèrement (acceptable POC).
-  content.clear();
-}
-
-// =============================================================================
-// Mesures & rôles
-// =============================================================================
-function measure(object3d) {
-  const box = new THREE.Box3().setFromObject(object3d);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  return { box, size };
-}
-
-// Statut de conformité d'un nom de matériau vis-à-vis de la convention.
-//  'ok'      : nom == rôle canonique
-//  'rename'  : alias hérité reconnu -> à renommer en <role>
-//  'default' : nom par défaut SketchUp (*1, Material, sans nom) -> à nommer
-//  'unknown' : nom inconnu -> à nommer/mapper
-function namingStatus(name) {
-  if (CANONICAL_ROLES.includes(name)) return 'ok';
-  if (LEGACY_ALIASES[name]) return 'rename';
-  if (name === '(sans nom)' || /^\*\d+$/.test(name) || /^material(\s|_|\d|$)/i.test(name)) return 'default';
-  return 'unknown';
-}
-
-function listMaterials(object3d) {
-  const found = new Map(); // name -> { role, count, baked }
-  object3d.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    for (const m of mats) {
-      const name = m.name || '(sans nom)';
-      const role = roleOfMaterial(name);
-      // texture incrustée (bakée) : baseColor map ou autres maps présentes
-      const baked = !!(m.map || m.aoMap || m.roughnessMap || m.metalnessMap || m.normalMap);
-      const e = found.get(name) || { role, count: 0, baked: false, status: namingStatus(name) };
-      e.count++;
-      e.baked = e.baked || baked;
-      found.set(name, e);
-    }
-  });
-  return found;
-}
-
-// =============================================================================
-// Finitions
-// =============================================================================
-function applyFinishes(object3d) {
-  object3d.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    const role = roleOfMaterial(o.material.name);
-    if (!role || role === 'metal_hardware') return; // figé (inox)
-    if (role === 'glass') { o.material = makeGlassMaterial(); return; } // figé (verre)
-    const m = o.material.clone(); // jamais muter un matériau partagé
-    if (WOOD_ROLES.includes(role)) applyWoodFinish(m, role);
-    else if (role === 'metal_structure') applyMetalFinish(m);
-    else return;
-    m.needsUpdate = true;
-    o.material = m;
-  });
-}
-
-// Colore chaque mesh par son rôle (vue Audit)
-function colorByRole(object3d) {
-  object3d.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    const role = roleOfMaterial(o.material.name) || '_none';
-    const m = o.material.clone();
-    m.color = new THREE.Color(ROLE_DEBUG_COLOR[role] ?? ROLE_DEBUG_COLOR._none);
-    m.map = null;
-    m.metalness = role.startsWith('metal') ? 0.8 : 0.0;
-    m.roughness = 0.5;
-    m.needsUpdate = true;
-    o.material = m;
-  });
-}
-
-// =============================================================================
-// Placement 2D -> 3D (cf. CLAUDE.md)
-// =============================================================================
-function worldPosition(el, assetMeta, H_MAX) {
-  let X = el.x * S; // coin gauche
-  const yTop = (H_MAX - el.y) * S; // bord haut de l'élément (Y JSON vers le bas)
-  let Y;
-  if (assetMeta.anchor === 'bottom') {
-    Y = yTop - assetMeta.runtimeSizeY; // caler le haut, origine .glb en bas
-  } else {
-    Y = yTop;
-  }
-  let Z = assetMeta.depthLayer;
-  // décalage par composant (table OFFSETS, en mm -> m)
-  const off = assetMeta.offset || { x: 0, y: 0, z: 0 };
-  X += off.x / 1000;
-  Y += off.y / 1000;
-  Z += off.z / 1000;
-  return new THREE.Vector3(X, Y, Z);
-}
-
-// =============================================================================
-// UI / log
+// Log (rendu des données dans #info)
 // =============================================================================
 const info = document.getElementById('info');
-
-function clearLog() { info.innerHTML = ''; }
+const clearLog = () => { info.innerHTML = ''; };
+const mm = (m) => (m * 1000).toFixed(1);
 
 function log(text, level = 'info') {
   const line = document.createElement('div');
@@ -469,14 +37,12 @@ function log(text, level = 'info') {
   line.appendChild(document.createTextNode(text));
   info.appendChild(line);
 }
-
 function logHTML(html) {
   const line = document.createElement('div');
   line.className = 'log-line';
   line.innerHTML = html;
   info.appendChild(line);
 }
-
 function blockTitle(t) {
   const h = document.createElement('h3');
   h.className = 'block';
@@ -484,66 +50,29 @@ function blockTitle(t) {
   info.appendChild(h);
 }
 
-const mm = (m) => (m * 1000).toFixed(1);
-
 // =============================================================================
-// Cadrage caméra
+// Rendu des résultats d'AUDIT (données moteur -> log)
 // =============================================================================
-function frame(object3d, margin = 1.6) {
-  const { box, size } = measure(object3d);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 0.5;
-  const dist = (radius * margin) / Math.tan((camera.fov * Math.PI) / 360);
-  const dir = new THREE.Vector3(0.6, 0.45, 1).normalize();
-  camera.position.copy(center).add(dir.multiplyScalar(dist + radius));
-  controls.target.copy(center);
-  controls.update();
-}
-
-// =============================================================================
-// MODE 1 — Audit composant
-// =============================================================================
-async function runAudit(type) {
-  clearContent();
+function renderAudit(type, a) {
   clearLog();
-  const def = CATALOG[type];
-
   blockTitle(`Audit · ${type}`);
 
-  let template;
-  try {
-    template = await loadTemplate(type);
-  } catch (e) {
-    log(`Échec de chargement : ${e.message}`, 'err');
-    return;
-  }
-
-  const model = template.clone(true);
-  content.add(model);
-
-  // --- Mesure bbox (vs expect si le composant est dans le CATALOG) ---
-  const { box, size } = measure(model);
   blockTitle('Dimensions (bbox mesurée)');
-  if (!def?.expect) log('Pas de dimensions attendues (expect) pour ce composant — audit informatif.', 'info');
-  for (const axis of ['x', 'y', 'z']) {
-    const got = size[axis];
-    const exp = def?.expect?.[`size${axis.toUpperCase()}`];
-    if (exp === undefined) {
-      log(`${axis.toUpperCase()} = ${mm(got)} mm`, 'info');
+  if (!a.dimensions.some((d) => d.expected !== null)) {
+    log('Pas de dimensions attendues (expect) pour ce composant — audit informatif.', 'info');
+  }
+  for (const d of a.dimensions) {
+    if (d.expected === null) {
+      log(`${d.axis} = ${mm(d.measured)} mm`, 'info');
     } else {
-      const delta = got - exp;
-      const level = Math.abs(delta) <= TOL ? 'ok' : 'warn';
-      log(`${axis.toUpperCase()} = ${mm(got)} mm  (attendu ${mm(exp)} mm, Δ ${delta >= 0 ? '+' : ''}${mm(delta)} mm)`, level);
+      log(`${d.axis} = ${mm(d.measured)} mm  (attendu ${mm(d.expected)} mm, Δ ${d.delta >= 0 ? '+' : ''}${mm(d.delta)} mm)`, d.status);
     }
   }
 
-  // --- Origine / pivot (sujet n°1) ---
   blockTitle('Origine / pivot');
-  const min = box.min, max = box.max;
+  const { min, max, atCorner } = a.origin;
   log(`bbox.min = (${mm(min.x)}, ${mm(min.y)}, ${mm(min.z)}) mm`, 'info');
   log(`bbox.max = (${mm(max.x)}, ${mm(max.y)}, ${mm(max.z)}) mm`, 'info');
-  const atCorner = Math.abs(min.x) <= TOL && Math.abs(min.y) <= TOL && Math.abs(min.z) <= TOL;
   log(
     atCorner
       ? 'Pivot au coin gauche-bas-arrière (min ≈ 0,0,0) ✓'
@@ -551,521 +80,84 @@ async function runAudit(type) {
     atCorner ? 'ok' : 'warn'
   );
 
-  // --- Matériaux & rôles ---
   blockTitle('Conformité matières');
-  const mats = listMaterials(model);
-  if (mats.size === 0) log('Aucun matériau nommé trouvé.', 'warn');
-  let nbOk = 0, nbRename = 0, nbTodo = 0, nbBaked = 0;
-  for (const [name, e] of mats) {
-    const col = e.role ? '#' + new THREE.Color(ROLE_DEBUG_COLOR[e.role]).getHexString() : 'transparent';
+  if (!a.materials.length) log('Aucun matériau nommé trouvé.', 'warn');
+  for (const m of a.materials) {
+    const col = m.role ? '#' + roleColorHex(m.role) : 'transparent';
     const swatch = `<span class="swatch" style="background:${col}"></span>`;
     let tag, msg;
-    switch (e.status) {
+    switch (m.status) {
       case 'ok':
-        tag = '<span class="tag ok">OK</span>'; nbOk++;
-        msg = `${swatch}<b>${name}</b> <span class="muted">(conforme)</span> ×${e.count}`;
+        tag = '<span class="tag ok">OK</span>';
+        msg = `${swatch}<b>${m.name}</b> <span class="muted">(conforme)</span> ×${m.count}`;
         break;
       case 'rename':
-        tag = '<span class="tag warn">RENOMMER</span>'; nbRename++;
-        msg = `${swatch}<b>${name}</b> → renommer en <b>${e.role}</b> dans SketchUp ×${e.count}`;
+        tag = '<span class="tag warn">RENOMMER</span>';
+        msg = `${swatch}<b>${m.name}</b> → renommer en <b>${m.role}</b> dans SketchUp ×${m.count}`;
         break;
       case 'default':
-        tag = '<span class="tag warn">À NOMMER</span>'; nbTodo++;
-        msg = `<b>${name}</b> = nom par défaut SketchUp → nommer par rôle${e.role ? ` (probable <b>${e.role}</b>)` : ''} ×${e.count}`;
+        tag = '<span class="tag warn">À NOMMER</span>';
+        msg = `<b>${m.name}</b> = nom par défaut SketchUp → nommer par rôle${m.role ? ` (probable <b>${m.role}</b>)` : ''} ×${m.count}`;
         break;
       default:
-        tag = '<span class="tag err">À NOMMER</span>'; nbTodo++;
-        msg = `<b>${name}</b> → rôle inconnu, à nommer par rôle ×${e.count}`;
+        tag = '<span class="tag err">À NOMMER</span>';
+        msg = `<b>${m.name}</b> → rôle inconnu, à nommer par rôle ×${m.count}`;
     }
     logHTML(tag + msg);
-    if (e.baked) {
-      nbBaked++;
-      const isWood = WOOD_ROLES.includes(e.role);
-      if (isWood) {
-        logHTML(`<span class="tag info">TEXTURE</span><b>${name}</b> : texture bois = porte les UV (sens du fil), OK. Réduite au nettoyage (clean-glb.sh).`);
-      } else {
-        logHTML(`<span class="tag warn">TEXTURE</span><b>${name}</b> : texture inutile pour ce rôle (couleur unie attendue) — réduite au nettoyage.`);
-      }
+    if (m.baked) {
+      const isWood = m.role && m.role.startsWith('wood');
+      logHTML(isWood
+        ? `<span class="tag info">TEXTURE</span><b>${m.name}</b> : texture bois = porte les UV (sens du fil), OK. Réduite au nettoyage.`
+        : `<span class="tag warn">TEXTURE</span><b>${m.name}</b> : texture inutile pour ce rôle (couleur unie attendue) — réduite au nettoyage.`);
     }
-    // rappels matières figées
-    if (e.role === 'metal_hardware') {
-      logHTML(`<span class="tag info">FIGÉ</span><b>${name}</b> : metal_hardware = inox, jamais piloté`);
-    }
-    if (e.role === 'glass') {
-      logHTML(`<span class="tag info">FIGÉ</span><b>${name}</b> : glass = verre transparent, jamais piloté`);
-    }
+    if (m.role === 'metal_hardware') logHTML(`<span class="tag info">FIGÉ</span><b>${m.name}</b> : metal_hardware = inox, jamais piloté`);
+    if (m.role === 'glass') logHTML(`<span class="tag info">FIGÉ</span><b>${m.name}</b> : glass = verre transparent, jamais piloté`);
   }
-  // Niveau basé sur le NOMMAGE seul : les textures sont gérées au nettoyage (resize).
-  const recap = `Récap : ${nbOk} conforme(s), ${nbRename} à renommer, ${nbTodo} à nommer, ${nbBaked} texture(s) bakée(s) (réduites au nettoyage).`;
-  log(recap, (nbRename + nbTodo) === 0 ? 'ok' : 'warn');
-
-  // --- Marqueurs visuels min/max + axes à l'origine ---
-  addCornerMarker(min, 0x5bd17a); // vert = min (pivot attendu)
-  addCornerMarker(max, 0xff6b6b); // rouge = max
-
-  // coloration par rôle pour vérifier visuellement le mapping matière
-  colorByRole(model);
-
-  helpers.position.set(0, 0, 0);
-  wall.visible = false; // pas pertinent en audit isolé
-  grid.visible = true;
-  frame(model);
+  const { ok, rename, todo, baked } = a.recap;
+  log(`Récap : ${ok} conforme(s), ${rename} à renommer, ${todo} à nommer, ${baked} texture(s) bakée(s) (réduites au nettoyage).`,
+    (rename + todo) === 0 ? 'ok' : 'warn');
 }
 
-function addCornerMarker(pos, color) {
-  const g = new THREE.SphereGeometry(0.008, 16, 16);
-  const m = new THREE.MeshBasicMaterial({ color });
-  const s = new THREE.Mesh(g, m);
-  s.position.copy(pos);
-  s.userData.helper = true; // repère : exclu du PNG et de l'export GLB
-  content.add(s);
-}
-
-// Masque/affiche tous les repères (groupe helpers + objets repères dans content).
-function setAllHelpersVisible(v) {
-  helpers.visible = v;
-  content.traverse((o) => { if (o.userData?.helper) o.visible = v; });
-}
+// Couleur de debug par rôle (pour les pastilles du log) — alignée sur le moteur.
+const ROLE_HEX = {
+  wood: 'c98a3c', wood_face: 'c98a3c', wood_edge: '8a5a2b', wood_raw: 'dcb579',
+  metal_structure: '5b9bd5', metal_hardware: 'c0c0c0', glass: '9fd8e6',
+};
+const roleColorHex = (role) => ROLE_HEX[role] || 'ff3b6b';
 
 // =============================================================================
-// MODE 2 — Composition
+// Rendu de la VALIDATION de composition (données moteur -> log)
 // =============================================================================
-let currentSchema = null;
-
-// Point d'entrée mode 2 : (re)charge les templates puis place + recadre.
-async function runComposition(schema) {
-  currentSchema = schema;
-  const data = schema?.data;
-  if (!data || !Array.isArray(data.elements)) {
-    clearContent(); clearLog();
-    log('JSON invalide : data.elements manquant.', 'err');
-    return;
-  }
-  // Pré-charger les templates uniques (une seule fois)
-  const types = [...new Set(data.elements.map((e) => e.type))];
-  for (const t of types) {
-    if (!CATALOG[t]) continue;
-    if (!glbCache.has(t)) { try { await loadTemplate(t); } catch (e) { /* loggé dans placeAll */ } }
-  }
-  populateNudgeTypes(data);
-  initFinishesFromJSON(data); // finitions par défaut + peuplement des sélecteurs
-  placeAll(true); // refit la caméra
-}
-
-// Place tous les éléments selon les OFFSETS courants. refit=false => garde la caméra
-// (utile pendant le réglage live des décalages).
-function placeAll(refit) {
-  clearContent();
+function renderComposition(rep) {
   clearLog();
-  wall.visible = true;
-  grid.visible = true;
-  helpers.position.set(0, 0, 0);
-
-  const data = currentSchema?.data;
-  if (!data) return;
-
   blockTitle('Composition');
-  log(`${data.elements.length} éléments · bois=${woodLabel()} · métal=${metalLabel()}`, 'info');
+  log(`${rep.elementCount} éléments · bois=${finishLabel(viewer.woodFinish)} · métal=${finishLabel(viewer.metalFinish)}`, 'info');
+  for (const e of rep.errors) log(e, 'err');
 
-  const H_MAX = Math.max(...data.elements.map((e) => e.y + e.height));
-
-  const placed = [];
-  const gridBoxes = []; // toutes les grilles (peut y en avoir plusieurs)
-
-  for (const el of data.elements) {
-    const def = CATALOG[el.type];
-    if (!def) { log(`Type absent du CATALOG : ${el.type} (ignoré)`, 'err'); continue; }
-    if (!glbCache.has(el.type)) { log(`Template non chargé : ${el.type}`, 'err'); continue; }
-
-    const model = instanceOf(el.type);
-
-    const { size } = measure(model);
-    // offset live (table OFFSETS) injecté dans le meta
-    const meta = { ...def, runtimeSizeY: size.y, offset: ensureOffset(el.type) };
-
-    const pos = worldPosition(el, meta, H_MAX);
-    model.position.copy(pos);
-
-    applyFinishes(model);
-    content.add(model);
-
-    const { box } = measure(model);
-    placed.push({ el, def, box, size });
-    if (el.type === 'gridGF') gridBoxes.push(box);
-  }
-
-  // Enveloppe (union) de toutes les grilles → référence pour le débord
-  let gridEnvelope = null;
-  if (gridBoxes.length) {
-    gridEnvelope = gridBoxes[0].clone();
-    for (let i = 1; i < gridBoxes.length; i++) gridEnvelope.union(gridBoxes[i]);
-  }
-
-  // Une planche déborde si elle sort de TOUTES les grilles à la fois (X) ;
-  // on rapporte le débord minimal vs la grille la plus proche.
-  function overhangVsGrids(box) {
-    if (!gridBoxes.length) return null;
-    // débord = plus petite "sortie" parmi les grilles (la planche peut appartenir à l'une d'elles)
-    let best = null;
-    for (const g of gridBoxes) {
-      const o = {
-        L: g.min.x - box.min.x, R: box.max.x - g.max.x,
-        B: g.min.y - box.min.y, T: box.max.y - g.max.y,
-      };
-      // "score" = pire débord vs cette grille (0 si entièrement dedans en X/Y)
-      const worst = Math.max(o.L, o.R, o.B, o.T, 0);
-      if (best === null || worst < best.worst) best = { ...o, worst };
-    }
-    return best;
-  }
-
-  // --- Validation des placements ---
   blockTitle('Validation placements');
-  if (gridBoxes.length > 1) log(`${gridBoxes.length} grilles détectées → débord mesuré vs la grille la plus proche.`, 'info');
-  for (const p of placed) {
-    const { el, size, box } = p;
-
-    const fpW = el.width * S, fpH = el.height * S;
-    const dW = size.x - fpW, dH = size.y - fpH;
-    const wLevel = Math.abs(dW) <= 0.01 ? 'ok' : 'warn';
-    log(`#${el.id} ${el.type} · footprint JSON ${mm(fpW)}×${mm(fpH)} mm vs bbox ${mm(size.x)}×${mm(size.y)} mm (Δ ${mm(dW)}×${mm(dH)})`, wLevel);
-
-    if (el.type !== 'gridGF') {
-      const o = overhangVsGrids(box);
-      if (o) {
-        if (o.L > TOL) log(`#${el.id} dépasse de ${mm(o.L)} mm à GAUCHE de la grille`, 'warn');
-        if (o.R > TOL) log(`#${el.id} dépasse de ${mm(o.R)} mm à DROITE de la grille`, 'warn');
-        if (o.T > TOL) log(`#${el.id} dépasse de ${mm(o.T)} mm en HAUT de la grille`, 'warn');
-        if (o.B > TOL) log(`#${el.id} dépasse de ${mm(o.B)} mm en BAS de la grille`, 'warn');
-      }
+  if (rep.gridCount > 1) log(`${rep.gridCount} grilles détectées → débord mesuré vs la grille la plus proche.`, 'info');
+  for (const el of rep.elements) {
+    const fp = el.footprint, bb = el.bbox, d = el.footprintDelta;
+    const lvl = Math.abs(d.w) <= 0.01 ? 'ok' : 'warn';
+    log(`#${el.id} ${el.type} · footprint JSON ${mm(fp.w)}×${mm(fp.h)} mm vs bbox ${mm(bb.w)}×${mm(bb.h)} mm (Δ ${mm(d.w)}×${mm(d.h)})`, lvl);
+    const o = el.overhang;
+    if (o) {
+      if (o.L > 0.002) log(`#${el.id} dépasse de ${mm(o.L)} mm à GAUCHE de la grille`, 'warn');
+      if (o.R > 0.002) log(`#${el.id} dépasse de ${mm(o.R)} mm à DROITE de la grille`, 'warn');
+      if (o.T > 0.002) log(`#${el.id} dépasse de ${mm(o.T)} mm en HAUT de la grille`, 'warn');
+      if (o.B > 0.002) log(`#${el.id} dépasse de ${mm(o.B)} mm en BAS de la grille`, 'warn');
     }
   }
-
-  // bbox globale (repère : exclue du PNG et de l'export GLB)
-  if (placed.length) {
-    const gb = new THREE.Box3().setFromObject(content);
-    const bboxHelper = new THREE.Box3Helper(gb, new THREE.Color(0x6ab0ff));
-    bboxHelper.userData.helper = true;
-    content.add(bboxHelper);
-    if (refit) frameBox(gb);
-  }
-
-  updateOffsetReadout();
 }
 
-function frameBox(box, margin = 1.5) {
-  const size = new THREE.Vector3(); box.getSize(size);
-  const center = new THREE.Vector3(); box.getCenter(center);
-  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 0.5;
-  const dist = (radius * margin) / Math.tan((camera.fov * Math.PI) / 360);
-  const dir = new THREE.Vector3(0.4, 0.25, 1).normalize();
-  camera.position.copy(center).add(dir.multiplyScalar(dist + radius));
-  controls.target.copy(center);
-  controls.update();
-}
+const finishLabel = (f) => f?.label || (f?.maps ? 'texture' : ('couleur ' + intToHex(f?.color ?? 0)));
 
 // =============================================================================
-// Réglage des décalages (offsets) — calibration visuelle
+// Modes (audit / composition)
 // =============================================================================
-const nudgeType = document.getElementById('nudge-type');
-const nudgeStep = document.getElementById('nudge-step');
-const offsetReadout = document.getElementById('offset-readout');
-
-// Remplit le sélecteur de composant à régler à partir des types présents (hors grille = référence).
-function populateNudgeTypes(data) {
-  const types = [...new Set(data.elements.map((e) => e.type))].filter((t) => CATALOG[t]);
-  const prev = nudgeType.value;
-  nudgeType.innerHTML = '';
-  for (const t of types) {
-    const o = document.createElement('option');
-    o.value = t;
-    o.textContent = t + (t === 'gridGF' ? ' (référence)' : '');
-    nudgeType.appendChild(o);
-  }
-  // défaut : premier non-grille si dispo
-  const def = types.find((t) => t !== 'gridGF') || types[0];
-  nudgeType.value = types.includes(prev) ? prev : def;
-}
-
-function updateOffsetReadout() {
-  const t = nudgeType.value;
-  if (!t || !OFFSETS[t]) { offsetReadout.textContent = ''; return; }
-  const o = OFFSETS[t];
-  offsetReadout.innerHTML = `<b>${t}</b>.offset = { x:${o.x}, y:${o.y}, z:${o.z} } mm`;
-}
-
-function nudge(axis, dir) {
-  const t = nudgeType.value;
-  if (!t) return;
-  const o = ensureOffset(t);
-  const step = parseFloat(nudgeStep.value) || 1;
-  o[axis] = +(o[axis] + dir * step).toFixed(2);
-  placeAll(false); // re-place sans recadrer ; met aussi à jour le readout + la validation
-}
-
-function resetOffsets() {
-  const t = nudgeType.value;
-  if (!t) return;
-  OFFSETS[t] = CATALOG[t]?.offset ? { ...CATALOG[t].offset } : { x: 0, y: 0, z: 0 };
-  placeAll(false);
-}
-
-// Produit le contenu de offset.json (tous les composants), prêt à coller.
-function copyOffsetTable() {
-  const ordered = {};
-  for (const [t, o] of Object.entries(OFFSETS)) ordered[t] = { x: o.x, y: o.y, z: o.z };
-  const json = JSON.stringify(ordered, null, 2);
-  navigator.clipboard?.writeText(json).then(
-    () => log('offset.json copié dans le presse-papier ✓ — colle-le dans offset.json', 'ok'),
-    () => log('Copie auto impossible — copie le bloc ci-dessous à la main', 'warn')
-  );
-  blockTitle('offset.json (à coller)');
-  logHTML(`<pre style="white-space:pre-wrap;margin:0">${json.replace(/</g, '&lt;')}</pre>`);
-}
-
-// =============================================================================
-// Finitions (sélecteurs bois/métal + couleurs perso)
-// =============================================================================
-const finishWoodSel = document.getElementById('finish-wood');
-const finishMetalSel = document.getElementById('finish-metal');
-const woodColorInput = document.getElementById('wood-color');
-const metalColorInput = document.getElementById('metal-color');
-
-const hexToInt = (hex) => parseInt(hex.replace('#', ''), 16);
-const intToHex = (n) => '#' + n.toString(16).padStart(6, '0');
-
-function woodLabel() {
-  if (woodFinish.maps) return woodFinish.label || 'texture';
-  return woodFinish.label || ('couleur ' + intToHex(woodFinish.color));
-}
-function metalLabel() {
-  return metalFinish.label || ('couleur ' + intToHex(metalFinish.color));
-}
-
-// Construit une fois les <option> des sélecteurs (set fixe).
-function populateFinishSelectors() {
-  finishWoodSel.innerHTML = '';
-  for (const [key, def] of Object.entries(WOOD_FINISHES)) {
-    finishWoodSel.appendChild(new Option(def.label, key));
-  }
-  finishWoodSel.appendChild(new Option('Couleur perso…', 'custom'));
-  finishMetalSel.innerHTML = '';
-  for (const [key, def] of Object.entries(METAL_FINISHES)) {
-    finishMetalSel.appendChild(new Option(def.label, key));
-  }
-  finishMetalSel.appendChild(new Option('Couleur perso…', 'custom'));
-}
-let finishSelectorsReady = false;
-
-// Finition d'AFFICHAGE par défaut au 1er rendu (override one-shot du JSON).
-let pendingDisplayFinish = { wood: 'birch', metal: 'black' };
-
-// Initialise les finitions depuis le JSON et aligne l'UI.
-function initFinishesFromJSON(data) {
-  if (!finishSelectorsReady) { populateFinishSelectors(); finishSelectorsReady = true; }
-  let w = data.woodColor, m = data.metalColor;
-  if (pendingDisplayFinish) { // au démarrage : Bouleau / Noir, puis comportement normal
-    if (WOOD_FINISHES[pendingDisplayFinish.wood]) w = pendingDisplayFinish.wood;
-    if (METAL_FINISHES[pendingDisplayFinish.metal]) m = pendingDisplayFinish.metal;
-    pendingDisplayFinish = null;
-  }
-  woodFinish = WOOD_FINISHES[w] ? { ...WOOD_FINISHES[w] } : { ...WOOD_FINISHES.black };
-  metalFinish = METAL_FINISHES[m] ? { ...METAL_FINISHES[m] } : { ...METAL_FINISHES.black };
-  finishWoodSel.value = WOOD_FINISHES[w] ? w : 'black';
-  finishMetalSel.value = METAL_FINISHES[m] ? m : 'black';
-  if (woodFinish.color !== undefined) woodColorInput.value = intToHex(woodFinish.color);
-  if (metalFinish.color !== undefined) metalColorInput.value = intToHex(metalFinish.color);
-  syncWoodSliders();
-  syncMetalSliders();
-}
-
-function onWoodSelect() {
-  const v = finishWoodSel.value;
-  if (v === 'custom') {
-    woodFinish = { color: hexToInt(woodColorInput.value), label: 'perso', params: { ...DEFAULT_WOOD_PARAMS } };
-  } else {
-    woodFinish = { ...WOOD_FINISHES[v] }; // params partagé par réf -> les sliders persistent dans la session
-    if (woodFinish.color !== undefined) woodColorInput.value = intToHex(woodFinish.color);
-  }
-  syncWoodSliders();
-  if (currentSchema) placeAll(false);
-}
-
-// Config des sliders texture bois (id, clé params, format).
-const TEX_SLIDERS = [
-  { id: 'tex-repeat', key: 'repeat',       fmt: (v) => v.toFixed(1) },
-  { id: 'tex-bright', key: 'brightness',   fmt: (v) => v.toFixed(2) },
-  { id: 'tex-rough',  key: 'roughness',    fmt: (v) => v.toFixed(2) },
-  { id: 'tex-env',    key: 'envIntensity', fmt: (v) => v.toFixed(1) },
-];
-
-// Config des sliders métal (éditent directement la finition métal active).
-const MET_SLIDERS = [
-  { id: 'met-metal', key: 'metalness',    fmt: (v) => v.toFixed(2), def: 1 },
-  { id: 'met-rough', key: 'roughness',    fmt: (v) => v.toFixed(2), def: 0.4 },
-  { id: 'met-env',   key: 'envIntensity', fmt: (v) => v.toFixed(1), def: 1 },
-];
-
-// Aligne les sliders métal sur la finition métal active.
-function syncMetalSliders() {
-  for (const s of MET_SLIDERS) {
-    const input = document.getElementById(s.id);
-    const out = document.getElementById(s.id + '-v');
-    const v = metalFinish[s.key] ?? s.def;
-    input.value = v;
-    out.textContent = s.fmt(v);
-  }
-}
-
-// Charge finishes.json et fusionne dans WOOD_FINISHES / METAL_FINISHES.
-async function loadFinishes() {
-  try {
-    const res = await fetch('./finishes.json');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const toInt = (c) => (typeof c === 'string' ? hexToInt(c) : c);
-    for (const [k, o] of Object.entries(data.wood || {})) {
-      if (k.startsWith('_')) continue;
-      const f = { label: o.label };
-      if (o.maps) f.maps = { ...o.maps };
-      if (o.color !== undefined) f.color = toInt(o.color);
-      f.params = { ...DEFAULT_WOOD_PARAMS, ...(o.params || {}) };
-      WOOD_FINISHES[k] = f;
-    }
-    for (const [k, o] of Object.entries(data.metal || {})) {
-      if (k.startsWith('_')) continue;
-      METAL_FINISHES[k] = { label: o.label, color: toInt(o.color), metalness: o.metalness ?? 1, roughness: o.roughness ?? 0.4, envIntensity: o.envIntensity ?? 1 };
-    }
-  } catch (e) {
-    console.warn('finishes.json non chargé (défauts utilisés) :', e.message);
-  }
-}
-
-// Sérialise l'état courant des finitions au format finishes.json.
-function serializeFinishes() {
-  const wood = {};
-  for (const [k, f] of Object.entries(WOOD_FINISHES)) {
-    const o = { label: f.label };
-    if (f.maps) o.maps = { ...f.maps };
-    if (f.color !== undefined) o.color = intToHex(f.color);
-    o.params = { ...f.params };
-    wood[k] = o;
-  }
-  const metal = {};
-  for (const [k, f] of Object.entries(METAL_FINISHES)) {
-    metal[k] = { label: f.label, color: intToHex(f.color), metalness: f.metalness, roughness: f.roughness, envIntensity: f.envIntensity ?? 1 };
-  }
-  return { wood, metal };
-}
-
-function copyFinishesTable() {
-  const json = JSON.stringify(serializeFinishes(), null, 2);
-  navigator.clipboard?.writeText(json).then(
-    () => log('finishes.json copié ✓ — colle-le dans finishes.json', 'ok'),
-    () => log('Copie auto impossible — copie le bloc ci-dessous', 'warn')
-  );
-  blockTitle('finishes.json (à coller)');
-  logHTML(`<pre style="white-space:pre-wrap;margin:0">${json.replace(/</g, '&lt;')}</pre>`);
-}
-
-// Aligne les sliders sur les params de la finition bois active.
-function syncWoodSliders() {
-  const p = woodFinish.params || DEFAULT_WOOD_PARAMS;
-  for (const s of TEX_SLIDERS) {
-    const input = document.getElementById(s.id);
-    const out = document.getElementById(s.id + '-v');
-    input.value = p[s.key];
-    out.textContent = s.fmt(p[s.key]);
-  }
-}
-
-function onMetalSelect() {
-  const v = finishMetalSel.value;
-  if (v === 'custom') {
-    metalFinish = { color: hexToInt(metalColorInput.value), metalness: 0.6, roughness: 0.4, envIntensity: 1, label: 'perso' };
-  } else {
-    metalFinish = { ...METAL_FINISHES[v] }; // partagé par réf -> sliders persistent dans la session
-    metalColorInput.value = intToHex(metalFinish.color);
-  }
-  syncMetalSliders();
-  if (currentSchema) placeAll(false);
-}
-
-// =============================================================================
-// Snapshot PNG transparent
-// =============================================================================
-function snapshot() {
-  const prevHelpers = helpers.visible;
-  setAllHelpersVisible(false); // PNG = uniquement les objets, aucun repère
-  const prevRatio = renderer.getPixelRatio();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * 2); // ×2 supplémentaire
-  onResize();
-  renderer.render(scene, camera);
-
-  renderer.domElement.toBlob((blob) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'gassien-render.png';
-    a.click();
-    URL.revokeObjectURL(url);
-    // restore
-    renderer.setPixelRatio(prevRatio);
-    setAllHelpersVisible(true);
-    helpers.visible = prevHelpers; // respecte le toggle « Repères »
-    onResize();
-  }, 'image/png');
-}
-
-// Exporte la composition (objets placés + finitions) en .glb, sans les repères.
-function exportCompositionGLB() {
-  if (!content.children.some((o) => o.isMesh || o.children?.length)) {
-    log('Rien à exporter (composition vide).', 'warn');
-    return;
-  }
-  const prevHelpers = helpers.visible;
-  setAllHelpersVisible(false); // exclut repères/bbox de l'export
-  const exporter = new GLTFExporter();
-  const restore = () => { setAllHelpersVisible(true); helpers.visible = prevHelpers; };
-  exporter.parse(
-    content,
-    (result) => {
-      const blob = new Blob([result], { type: 'model/gltf-binary' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'gassien-composition.glb';
-      a.click();
-      URL.revokeObjectURL(url);
-      restore();
-      log('Composition exportée : gassien-composition.glb ✓', 'ok');
-    },
-    (err) => { restore(); log('Export GLB échoué : ' + (err?.message || err), 'err'); },
-    { binary: true, onlyVisible: true }
-  );
-}
-
-// =============================================================================
-// Boucle de rendu & resize
-// =============================================================================
-function onResize() {
-  const w = stage.clientWidth, h = stage.clientHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-window.addEventListener('resize', onResize);
-
-function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-}
-
-// =============================================================================
-// Câblage UI
-// =============================================================================
-let mode = 'audit';
+let mode = 'compo';
+let currentSchema = null;
+let firstCompo = true;
 
 const btnAudit = document.getElementById('mode-audit');
 const btnCompo = document.getElementById('mode-compo');
@@ -1073,37 +165,24 @@ const ctrlAudit = document.getElementById('ctrl-audit');
 const ctrlCompo = document.getElementById('ctrl-compo');
 const auditSelect = document.getElementById('audit-select');
 
-// Peuple le sélecteur d'audit avec tous les composants réellement présents dans
-// glb/done/. On SONDE (HEAD) chaque composant connu (offset.json + CATALOG) car
-// la plupart des serveurs statiques (ex. Live Server) ne renvoient pas de listing
-// de dossier. Bonus : on ajoute aussi le listing serveur s'il est disponible.
-async function populateAuditSelect() {
-  const candidates = new Set([...Object.keys(OFFSETS), ...Object.keys(CATALOG)]);
+async function runAuditUI() {
+  const type = auditSelect.value;
+  if (!type) return;
   try {
-    const res = await fetch('./' + GLB_DIR);
-    const html = await res.text();
-    for (const m of html.matchAll(/href="([^"?]+\.glb)"/gi)) {
-      candidates.add(decodeURIComponent(m[1].split('/').pop()).replace(/\.glb$/i, ''));
-    }
-  } catch (e) { /* listing indispo : on s'appuie sur le sondage */ }
-
-  // garde ceux réellement présents (HEAD 200) dans glb/done/
-  const checks = await Promise.all([...candidates].map(async (t) => {
-    try { const r = await fetch(glbPathOf(t), { method: 'HEAD' }); return r.ok ? t : null; }
-    catch (e) { return null; }
-  }));
-  let types = checks.filter(Boolean).sort();
-  if (!types.length) types = Object.keys(CATALOG); // repli ultime
-
-  const prev = auditSelect.value;
-  auditSelect.innerHTML = '';
-  for (const type of types) {
-    const opt = document.createElement('option');
-    opt.value = type;
-    opt.textContent = type + (CATALOG[type]?.expect ? '' : ' •'); // • = pas d'expect (audit informatif)
-    auditSelect.appendChild(opt);
+    const a = await viewer.audit(type);
+    renderAudit(type, a);
+  } catch (e) {
+    clearLog();
+    log(`Échec de chargement : ${e.message}`, 'err');
   }
-  if (types.includes(prev)) auditSelect.value = prev;
+}
+
+async function runCompositionUI() {
+  if (!currentSchema) { clearLog(); log('Aucune composition chargée.', 'warn'); return; }
+  const rep = await viewer.loadComposition(currentSchema);
+  populateNudgeTypes(currentSchema.data);
+  renderComposition(rep);
+  updateOffsetReadout();
 }
 
 function setMode(m) {
@@ -1112,101 +191,230 @@ function setMode(m) {
   btnCompo.classList.toggle('active', m === 'compo');
   ctrlAudit.style.display = m === 'audit' ? '' : 'none';
   ctrlCompo.style.display = m === 'compo' ? '' : 'none';
-  if (m === 'audit') runAudit(auditSelect.value);
-  else runComposition(currentSchema);
+  if (m === 'audit') runAuditUI(); else runCompositionUI();
 }
 
 btnAudit.addEventListener('click', () => setMode('audit'));
 btnCompo.addEventListener('click', () => setMode('compo'));
-auditSelect.addEventListener('change', () => runAudit(auditSelect.value));
+auditSelect.addEventListener('change', runAuditUI);
 
-document.getElementById('toggle-helpers').addEventListener('click', (e) => {
-  helpersVisible = !helpersVisible;
-  helpers.visible = helpersVisible;
-  e.target.textContent = helpersVisible ? 'Repères ✓' : 'Repères ✗';
+// =============================================================================
+// Sélecteur d'audit : tous les composants présents (le moteur sonde glb/done/)
+// =============================================================================
+async function populateAuditSelect() {
+  const types = await viewer.listComponents();
+  const cat = viewer.getCatalog();
+  const prev = auditSelect.value;
+  auditSelect.innerHTML = '';
+  for (const t of (types.length ? types : Object.keys(cat))) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t + (cat[t]?.expect ? '' : ' •'); // • = pas d'expect (audit informatif)
+    auditSelect.appendChild(opt);
+  }
+  if (types.includes(prev)) auditSelect.value = prev;
+}
+
+// =============================================================================
+// Finitions (sélecteurs + sliders + couleurs perso)
+// =============================================================================
+const finishWoodSel = document.getElementById('finish-wood');
+const finishMetalSel = document.getElementById('finish-metal');
+const woodColorInput = document.getElementById('wood-color');
+const metalColorInput = document.getElementById('metal-color');
+
+const TEX_SLIDERS = [
+  { id: 'tex-repeat', key: 'repeat', fmt: (v) => v.toFixed(1) },
+  { id: 'tex-bright', key: 'brightness', fmt: (v) => v.toFixed(2) },
+  { id: 'tex-rough', key: 'roughness', fmt: (v) => v.toFixed(2) },
+  { id: 'tex-env', key: 'envIntensity', fmt: (v) => v.toFixed(1) },
+];
+const MET_SLIDERS = [
+  { id: 'met-metal', key: 'metalness', fmt: (v) => v.toFixed(2), def: 1 },
+  { id: 'met-rough', key: 'roughness', fmt: (v) => v.toFixed(2), def: 0.4 },
+  { id: 'met-env', key: 'envIntensity', fmt: (v) => v.toFixed(1), def: 1 },
+];
+
+function populateFinishSelectors() {
+  finishWoodSel.innerHTML = '';
+  for (const [key, def] of Object.entries(viewer.getWoodFinishes())) finishWoodSel.appendChild(new Option(def.label, key));
+  finishWoodSel.appendChild(new Option('Couleur perso…', 'custom'));
+  finishMetalSel.innerHTML = '';
+  for (const [key, def] of Object.entries(viewer.getMetalFinishes())) finishMetalSel.appendChild(new Option(def.label, key));
+  finishMetalSel.appendChild(new Option('Couleur perso…', 'custom'));
+}
+
+// Aligne sélecteurs + sliders + color inputs sur la finition active du moteur.
+function syncFinishUI() {
+  const w = viewer.woodFinish, m = viewer.metalFinish;
+  finishWoodSel.value = woodKeyOf(w);
+  finishMetalSel.value = metalKeyOf(m);
+  if (w.color !== undefined) woodColorInput.value = intToHex(w.color);
+  if (m.color !== undefined) metalColorInput.value = intToHex(m.color);
+  const wp = w.params || { repeat: 1, brightness: 1, roughness: 0.6, envIntensity: 1 };
+  for (const s of TEX_SLIDERS) setSlider(s, wp[s.key]);
+  for (const s of MET_SLIDERS) setSlider(s, m[s.key] ?? s.def);
+}
+function setSlider(s, v) {
+  document.getElementById(s.id).value = v;
+  document.getElementById(s.id + '-v').textContent = s.fmt(+v);
+}
+const woodKeyOf = (f) => Object.entries(viewer.getWoodFinishes()).find(([, d]) => d === f)?.[0] || 'custom';
+const metalKeyOf = (f) => Object.entries(viewer.getMetalFinishes()).find(([, d]) => d === f)?.[0] || 'custom';
+
+// finition d'affichage selon le JSON (1er rendu = Bouleau/Noir, sinon woodColor/metalColor)
+function applyFinishFromSchema(data) {
+  let w = data.woodColor, m = data.metalColor;
+  if (firstCompo) { w = 'birch'; m = 'black'; firstCompo = false; }
+  if (viewer.getWoodFinishes()[w]) viewer.setWoodFinish(w);
+  if (viewer.getMetalFinishes()[m]) viewer.setMetalFinish(m);
+  syncFinishUI();
+}
+
+finishWoodSel.addEventListener('change', () => {
+  const v = finishWoodSel.value;
+  viewer.setWoodFinish(v === 'custom' ? { color: woodColorInput.value } : v);
+  syncFinishUI();
+});
+finishMetalSel.addEventListener('change', () => {
+  const v = finishMetalSel.value;
+  viewer.setMetalFinish(v === 'custom' ? { color: metalColorInput.value } : v);
+  syncFinishUI();
+});
+woodColorInput.addEventListener('input', () => {
+  viewer.setWoodFinish({ color: woodColorInput.value });
+  finishWoodSel.value = 'custom';
+});
+metalColorInput.addEventListener('input', () => {
+  viewer.setMetalFinish({ color: metalColorInput.value });
+  finishMetalSel.value = 'custom';
+});
+for (const s of TEX_SLIDERS) {
+  document.getElementById(s.id).addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    document.getElementById(s.id + '-v').textContent = s.fmt(v);
+    viewer.setWoodParams({ [s.key]: v });
+  });
+}
+for (const s of MET_SLIDERS) {
+  document.getElementById(s.id).addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    document.getElementById(s.id + '-v').textContent = s.fmt(v);
+    viewer.setMetalParams({ [s.key]: v });
+  });
+}
+
+document.getElementById('finish-copy').addEventListener('click', () => {
+  const json = JSON.stringify(viewer.serializeFinishes(), null, 2);
+  copyToClipboard(json, 'finishes.json');
+  blockTitle('finishes.json (à coller)');
+  logHTML(`<pre style="white-space:pre-wrap;margin:0">${json.replace(/</g, '&lt;')}</pre>`);
 });
 
-document.getElementById('snapshot').addEventListener('click', snapshot);
-document.getElementById('export-glb').addEventListener('click', exportCompositionGLB);
+// =============================================================================
+// Réglage des décalages (offsets)
+// =============================================================================
+const nudgeType = document.getElementById('nudge-type');
+const nudgeStep = document.getElementById('nudge-step');
+const offsetReadout = document.getElementById('offset-readout');
 
-// --- Réglage des décalages ---
+function populateNudgeTypes(data) {
+  const cat = viewer.getCatalog();
+  const types = [...new Set(data.elements.map((e) => e.type))].filter((t) => cat[t]);
+  const prev = nudgeType.value;
+  nudgeType.innerHTML = '';
+  for (const t of types) nudgeType.appendChild(new Option(t + (t.startsWith('grid') ? ' (réf.)' : ''), t));
+  const def = types.find((t) => !t.startsWith('grid')) || types[0];
+  nudgeType.value = types.includes(prev) ? prev : def;
+}
+
+function updateOffsetReadout() {
+  const t = nudgeType.value;
+  if (!t) { offsetReadout.textContent = ''; return; }
+  const o = viewer.getOffset(t);
+  offsetReadout.innerHTML = `<b>${t}</b>.offset = { x:${o.x}, y:${o.y}, z:${o.z} } mm`;
+}
+
+function nudge(axis, dir) {
+  const t = nudgeType.value;
+  if (!t) return;
+  const o = viewer.getOffset(t);
+  const step = parseFloat(nudgeStep.value) || 1;
+  const next = { ...o, [axis]: +(o[axis] + dir * step).toFixed(2) };
+  const rep = viewer.setOffset(t, next);     // re-place et renvoie la validation
+  if (rep) renderComposition(rep);
+  updateOffsetReadout();
+}
+
 for (const btn of document.querySelectorAll('.nudge')) {
   btn.addEventListener('click', () => nudge(btn.dataset.axis, parseInt(btn.dataset.dir, 10)));
 }
 nudgeType.addEventListener('change', updateOffsetReadout);
-document.getElementById('offset-reset').addEventListener('click', resetOffsets);
-document.getElementById('offset-copy').addEventListener('click', copyOffsetTable);
-
-// --- Finitions ---
-finishWoodSel.addEventListener('change', onWoodSelect);
-finishMetalSel.addEventListener('change', onMetalSelect);
-woodColorInput.addEventListener('input', () => {
-  woodFinish = { color: hexToInt(woodColorInput.value), roughness: 0.6 };
-  finishWoodSel.value = 'custom';
-  if (currentSchema) placeAll(false);
+document.getElementById('offset-reset').addEventListener('click', () => {
+  const t = nudgeType.value;
+  if (!t) return;
+  const rep = viewer.setOffset(t, { x: 0, y: 0, z: 0 });
+  if (rep) renderComposition(rep);
+  updateOffsetReadout();
 });
-metalColorInput.addEventListener('input', () => {
-  const keep = { metalness: metalFinish.metalness ?? 0.6, roughness: metalFinish.roughness ?? 0.4, envIntensity: metalFinish.envIntensity ?? 1 };
-  metalFinish = { color: hexToInt(metalColorInput.value), ...keep, label: 'perso' };
-  finishMetalSel.value = 'custom';
-  if (currentSchema) placeAll(false);
+document.getElementById('offset-copy').addEventListener('click', () => {
+  const json = JSON.stringify(viewer.getOffsets(), null, 2);
+  copyToClipboard(json, 'offset.json');
+  blockTitle('offset.json (à coller)');
+  logHTML(`<pre style="white-space:pre-wrap;margin:0">${json.replace(/</g, '&lt;')}</pre>`);
 });
 
-document.getElementById('finish-copy').addEventListener('click', copyFinishesTable);
+// =============================================================================
+// Affichage / export
+// =============================================================================
+let helpersVisible = true;
+document.getElementById('toggle-helpers').addEventListener('click', (e) => {
+  helpersVisible = !helpersVisible;
+  viewer.setHelpersVisible(helpersVisible);
+  viewer.setBoundingBoxVisible(helpersVisible); // la bbox bleue suit le toggle « Repères »
+  e.target.textContent = helpersVisible ? 'Repères ✓' : 'Repères ✗';
+});
 
-// --- Réglages texture bois (sliders) : éditent les params de la finition active ---
-for (const s of TEX_SLIDERS) {
-  const input = document.getElementById(s.id);
-  const out = document.getElementById(s.id + '-v');
-  input.addEventListener('input', () => {
-    const v = parseFloat(input.value);
-    if (!woodFinish.params) woodFinish.params = { ...DEFAULT_WOOD_PARAMS };
-    woodFinish.params[s.key] = v;
-    out.textContent = s.fmt(v);
-    if (currentSchema) placeAll(false);
-  });
+document.getElementById('snapshot').addEventListener('click', async () => {
+  const blob = await viewer.snapshotPNG();
+  downloadBlob(blob, 'gassien-render.png');
+});
+document.getElementById('export-glb').addEventListener('click', async () => {
+  try {
+    const blob = await viewer.exportGLB();
+    downloadBlob(blob, 'gassien-composition.glb');
+    log('Composition exportée : gassien-composition.glb ✓', 'ok');
+  } catch (e) {
+    log('Export GLB échoué : ' + (e?.message || e), 'err');
+  }
+});
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+}
+function copyToClipboard(text, label) {
+  navigator.clipboard?.writeText(text).then(
+    () => log(`${label} copié dans le presse-papier ✓`, 'ok'),
+    () => log('Copie auto impossible — copie le bloc ci-dessous', 'warn')
+  );
 }
 
-// --- Réglages métal (sliders) : éditent la finition métal active + le registre ---
-for (const s of MET_SLIDERS) {
-  const input = document.getElementById(s.id);
-  const out = document.getElementById(s.id + '-v');
-  input.addEventListener('input', () => {
-    const v = parseFloat(input.value);
-    metalFinish[s.key] = v;
-    const key = finishMetalSel.value; // persiste dans le registre pour « Copier les finitions »
-    if (key !== 'custom' && METAL_FINISHES[key]) METAL_FINISHES[key][s.key] = v;
-    out.textContent = s.fmt(v);
-    if (currentSchema) placeAll(false);
-  });
-}
-
-// Flèches clavier (uniquement en mode composition, hors saisie)
-window.addEventListener('keydown', (e) => {
-  if (mode !== 'compo') return;
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  const map = {
-    ArrowLeft: ['x', -1], ArrowRight: ['x', 1],
-    ArrowDown: ['y', -1], ArrowUp: ['y', 1],
-    PageDown: ['z', -1], PageUp: ['z', 1],
-  };
-  const m = map[e.key];
-  if (!m) return;
-  e.preventDefault();
-  nudge(m[0], m[1]);
-});
-
+// =============================================================================
+// Chargement schema (fetch + drag-drop)
+// =============================================================================
 async function loadSchema() {
   try {
     const res = await fetch('./schema.json');
     currentSchema = await res.json();
-    if (mode === 'compo') runComposition(currentSchema);
+    applyFinishFromSchema(currentSchema.data); // finition d'affichage au chargement
   } catch (e) {
     log(`Impossible de charger schema.json : ${e.message}`, 'err');
   }
 }
-document.getElementById('reload-json').addEventListener('click', loadSchema);
-
+document.getElementById('reload-json').addEventListener('click', async () => { await loadSchema(); setMode('compo'); });
 document.getElementById('json-file').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -1214,25 +422,33 @@ document.getElementById('json-file').addEventListener('change', (e) => {
   reader.onload = () => {
     try {
       currentSchema = JSON.parse(reader.result);
+      applyFinishFromSchema(currentSchema.data);
       setMode('compo');
-    } catch (err) {
-      log(`JSON invalide : ${err.message}`, 'err');
-    }
+    } catch (err) { log(`JSON invalide : ${err.message}`, 'err'); }
   };
   reader.readAsText(file);
+});
+
+// Flèches clavier (mode composition) = décalage X/Y, PgUp/PgDn = Z.
+window.addEventListener('keydown', (e) => {
+  if (mode !== 'compo') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const map = { ArrowLeft: ['x', -1], ArrowRight: ['x', 1], ArrowDown: ['y', -1], ArrowUp: ['y', 1], PageDown: ['z', -1], PageUp: ['z', 1] };
+  const m = map[e.key];
+  if (!m) return;
+  e.preventDefault();
+  nudge(m[0], m[1]);
 });
 
 // =============================================================================
 // Démarrage
 // =============================================================================
-onResize();
-animate();
 (async () => {
-  await loadCatalog();        // métadonnées composants (catalog.json)
-  await loadOffsets();        // table de décalages persistante (offset.json)
-  await loadFinishes();       // finitions persistantes (finishes.json)
-  preloadTextures();          // textures bois (textures/*.jpg)
-  await populateAuditSelect();// composants disponibles dans glb/done/
-  await loadSchema();         // composition courante
-  setMode('compo');           // démarre sur la composition (finition par défaut Bouleau/Noir)
+  await viewer.init();
+  viewer.setBoundingBoxVisible(true); // POC : bbox bleue visible avec les repères
+  populateFinishSelectors();
+  syncFinishUI();
+  await populateAuditSelect();
+  await loadSchema();
+  setMode('compo');
 })();
