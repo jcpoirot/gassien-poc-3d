@@ -257,7 +257,17 @@ Objectif : `.glb` **léger, sans texture bakée, matériaux nommés par rôle, s
 ## Réutilisation dans l'admin (React + Ant Design)
 - **`gassien-viewer.js`** = moteur **framework-agnostic** extrait du POC (classe `GassienViewer`, **zéro UI**) : il prend un `<canvas>` + un `assetBaseUrl`, et **retourne des données** (audit/validation) au lieu d'écrire dans le DOM. C'est ce qu'on importe dans l'admin (Three.js en dépendance npm, plus d'importmap).
 - **`INTEGRATION.md`** = guide d'intégration (API, assets à servir en statique, formats de données, squelette React, pièges). Le Claude Code de l'admin câble l'UX Ant Design dessus.
-- `viewer.js` (POC) reste la **référence/démo** ; même logique que le moteur. Toute évolution de logique métier doit rester cohérente entre les deux (ou migrer le POC sur `gassien-viewer.js`).
+
+### ⭐ Source de vérité & synchro avec l'admin
+- **`gassien-viewer.js` (ce repo) = LE moteur canonique.** C'est le SEUL fichier copié dans l'admin :
+  `gassienCalculFront/src/components/maker/global/three/gassien-viewer.js`.
+- **Règle** : toute évolution de **logique moteur** (caméra/cadrage, matières, placement, export, nouvelles méthodes) se fait **ICI** (`gassien-viewer.js`), puis se **copie** vers l'admin :
+  ```bash
+  cp gassien-viewer.js <admin>/gassienCalculFront/src/components/maker/global/three/gassien-viewer.js
+  ```
+  Côté admin, on n'édite ce fichier directement **que** pour de l'intégration React ponctuelle (à éviter — sinon ça re-diverge).
+- **État (2026-06) backporté depuis l'admin** : cadrage **aspect-aware** (`_frameBox` tient compte du ratio largeur/hauteur ; `frame(margin)` ; `resize()` avant cadrage), **cadre bleu (bounding box) piloté** (`_bboxWanted`, `setBoundingBoxVisible()`, masqué par défaut indépendamment des `helpers`), `getDimensions()`, et masquage du cadre pendant snapshot/export.
+- ⚠️ **`viewer.js` (la démo procédurale lancée par `index.html`) NE partage PAS le code** de `gassien-viewer.js` (structure monolithique différente). Les évolutions ci-dessus **n'y sont pas répercutées** : la démo `index.html` ne reflète donc pas le comportement moteur à jour. Pour tester le moteur canonique de façon isolée, prévoir une petite page chargeant `gassien-viewer.js` directement (TODO harness), ou tester côté admin.
 
 ## Ordre de travail recommandé
 1. Mode 1 (audit) sur `gridGF` + `board40x15` → fiabiliser origines/échelle/rôles. ✅ origines/échelle/rôles confirmés (2026-06-05).

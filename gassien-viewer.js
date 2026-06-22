@@ -129,6 +129,7 @@ export class GassienViewer {
     this._loader = new GLTFLoader();
     this._texLoader = new THREE.TextureLoader();
     this.currentSchema = null;
+    this._bboxWanted = false; // cadre bleu (bounding box) — piloté par le bouton Dimensions
 
     this._setupRenderer();
     this._setupScene();
@@ -437,17 +438,34 @@ export class GassienViewer {
     this.content.traverse((o) => { if (o.userData?.helper) o.visible = v; });
   }
 
-  _frameObject(object3d, margin = 1.6, dir = new THREE.Vector3(0.6, 0.45, 1)) {
+  _frameObject(object3d, margin = 1.3, dir = new THREE.Vector3(0.6, 0.45, 1)) {
     const { box, size } = this._measure(object3d);
     this._frameBox(box, margin, dir);
     return { box, size };
   }
-  _frameBox(box, margin = 1.5, dir = new THREE.Vector3(0.4, 0.25, 1)) {
+
+  /**
+   * Cadre la caméra sur `box` en tenant compte du ratio du viewport (largeur ET
+   * hauteur) pour que la composition remplisse réellement la vue. Le point de
+   * rotation (controls.target) est placé au centre de la box.
+   * margin = 1.0 → la compo touche les bords ; 1.2 ≈ remplit ~83 %.
+   */
+  _frameBox(box, margin = 1.2, dir = new THREE.Vector3(0.5, 0.32, 1)) {
     const size = new THREE.Vector3(); box.getSize(size);
     const center = new THREE.Vector3(); box.getCenter(center);
-    const radius = Math.max(size.x, size.y, size.z) * 0.5 || 0.5;
-    const dist = (radius * margin) / Math.tan((this.camera.fov * Math.PI) / 360);
-    this.camera.position.copy(center).add(dir.clone().normalize().multiplyScalar(dist + radius));
+    const fov = (this.camera.fov * Math.PI) / 180;
+    const aspect = this.camera.aspect || 1;
+    const tan = Math.tan(fov / 2);
+    // Distance pour faire tenir la hauteur, et pour faire tenir la largeur
+    // (le FOV horizontal vaut le FOV vertical × aspect).
+    const fitH = (size.y * 0.5) / tan;
+    const fitW = (size.x * 0.5) / (tan * aspect);
+    let dist = Math.max(fitH, fitW, 0.001) * margin + size.z * 0.5;
+    if (!Number.isFinite(dist) || dist <= 0) dist = 1;
+    this.camera.position.copy(center).add(dir.clone().normalize().multiplyScalar(dist));
+    this.camera.near = Math.max(dist / 100, 0.005);
+    this.camera.far = dist * 100;
+    this.camera.updateProjectionMatrix();
     this.controls.target.copy(center);
     this.controls.update();
   }
@@ -586,7 +604,8 @@ export class GassienViewer {
     if (placed.length) {
       const gb = new THREE.Box3().setFromObject(this.content);
       const helper = new THREE.Box3Helper(gb, new THREE.Color(0x6ab0ff));
-      helper.userData.helper = true;
+      helper.userData.bbox = true;       // cadre bleu (piloté par setBoundingBoxVisible)
+      helper.visible = this._bboxWanted;  // masqué par défaut (helpers:false)
       this.content.add(helper);
       if (refit) this._frameBox(gb);
     }
@@ -632,14 +651,36 @@ export class GassienViewer {
 
   // --- Affichage ---
   setHelpersVisible(v) { this._helpersWanted = v; this._setAllHelpersVisible(v); }
-  frame() { if (this.content.children.length) this._frameBox(new THREE.Box3().setFromObject(this.content)); }
+
+  /** Recadre sur la composition. margin plus petit = plus serré (remplit plus l'écran). */
+  frame(margin = 1.2) {
+    if (!this.content.children.length) return;
+    this.resize(); // garantit le bon aspect avant de calculer la distance
+    this._frameBox(new THREE.Box3().setFromObject(this.content), margin);
+  }
+
+  /** Affiche/masque le cadre bleu (bounding box) de la composition. */
+  setBoundingBoxVisible(v) {
+    this._bboxWanted = v;
+    this.content.traverse((o) => { if (o.userData?.bbox) o.visible = v; });
+  }
+
+  /** Dimensions hors-tout de la composition en mètres, ou null si vide. */
+  getDimensions() {
+    if (!this.content.children.length) return null;
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(this.content).getSize(size);
+    return { w: size.x, h: size.y, d: size.z };
+  }
 
   // --- Export ---
   /** PNG fond transparent, sans repères. @returns {Promise<Blob>} */
   snapshotPNG({ scale = 2 } = {}) {
     return new Promise((resolve) => {
       const prev = this.helpers.visible;
+      const prevBbox = this._bboxWanted;
       this._setAllHelpersVisible(false);
+      this.setBoundingBoxVisible(false);
       const prevRatio = this.renderer.getPixelRatio();
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * scale);
       this.resize();
@@ -648,6 +689,7 @@ export class GassienViewer {
         this.renderer.setPixelRatio(prevRatio);
         this._setAllHelpersVisible(this._helpersWanted);
         this.helpers.visible = prev && this._helpersWanted;
+        this.setBoundingBoxVisible(prevBbox);
         this.resize();
         resolve(blob);
       }, 'image/png');
@@ -657,8 +699,10 @@ export class GassienViewer {
   /** Composition (objets + finitions) en .glb binaire, sans repères. @returns {Promise<Blob>} */
   exportGLB() {
     return new Promise((resolve, reject) => {
+      const prevBbox = this._bboxWanted;
       this._setAllHelpersVisible(false);
-      const restore = () => this._setAllHelpersVisible(this._helpersWanted);
+      this.setBoundingBoxVisible(false);
+      const restore = () => { this._setAllHelpersVisible(this._helpersWanted); this.setBoundingBoxVisible(prevBbox); };
       new GLTFExporter().parse(
         this.content,
         (result) => { restore(); resolve(new Blob([result], { type: 'model/gltf-binary' })); },
