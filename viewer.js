@@ -138,8 +138,12 @@ function renderComposition(rep) {
   if (rep.gridCount > 1) log(`${rep.gridCount} grilles détectées → débord mesuré vs la grille la plus proche.`, 'info');
   for (const el of rep.elements) {
     const fp = el.footprint, bb = el.bbox, d = el.footprintDelta;
-    const lvl = Math.abs(d.w) <= 0.01 ? 'ok' : 'warn';
-    log(`#${el.id} ${el.type} · footprint JSON ${mm(fp.w)}×${mm(fp.h)} mm vs bbox ${mm(bb.w)}×${mm(bb.h)} mm (Δ ${mm(d.w)}×${mm(d.h)})`, lvl);
+    if (fp && d) {
+      const lvl = Math.abs(d.w) <= 0.01 ? 'ok' : 'warn';
+      log(`#${el.id} ${el.type} · footprint JSON ${mm(fp.w)}×${mm(fp.h)} mm vs bbox ${mm(bb.w)}×${mm(bb.h)} mm (Δ ${mm(d.w)}×${mm(d.h)})`, lvl);
+    } else {
+      log(`#${el.id} ${el.type} · bbox ${mm(bb.w)}×${mm(bb.h)} mm (accessoire sans empreinte JSON)`, 'info');
+    }
     const o = el.overhang;
     if (o) {
       if (o.L > 0.002) log(`#${el.id} dépasse de ${mm(o.L)} mm à GAUCHE de la grille`, 'warn');
@@ -378,6 +382,10 @@ document.getElementById('toggle-helpers').addEventListener('click', (e) => {
 document.getElementById('snapshot').addEventListener('click', async () => {
   const blob = await viewer.snapshotPNG();
   downloadBlob(blob, 'gassien-render.png');
+});
+document.getElementById('snapshot-jpg').addEventListener('click', async () => {
+  const blob = await viewer.snapshotJPEG();
+  downloadBlob(blob, 'gassien-render.jpg');
 });
 document.getElementById('export-glb').addEventListener('click', async () => {
   try {

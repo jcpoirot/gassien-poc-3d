@@ -569,7 +569,10 @@ export class GassienViewer {
     const data = this.currentSchema?.data;
     if (!data) return { errors: [], elements: [] };
 
-    const H_MAX = Math.max(...data.elements.map((e) => e.y + e.height));
+    // H_MAX = bord bas max ; on ignore les éléments sans empreinte (accessoires
+    // exportés sans width/height) pour ne pas propager NaN à tous les placements.
+    const tops = data.elements.map((e) => e.y + e.height).filter(Number.isFinite);
+    const H_MAX = tops.length ? Math.max(...tops) : 0;
     const placed = [];
     const gridBoxes = [];
     const errors = [];
@@ -603,12 +606,14 @@ export class GassienViewer {
     };
 
     const elements = placed.map(({ el, box, size }) => {
+      const hasFp = Number.isFinite(el.width) && Number.isFinite(el.height);
       const fpW = el.width * S, fpH = el.height * S;
       const o = el.type.startsWith('grid') ? null : overhang(box);
       return {
         id: el.id, type: el.type,
-        footprint: { w: fpW, h: fpH }, bbox: { w: size.x, h: size.y, d: size.z },
-        footprintDelta: { w: size.x - fpW, h: size.y - fpH },
+        footprint: hasFp ? { w: fpW, h: fpH } : null,   // null = accessoire sans empreinte
+        bbox: { w: size.x, h: size.y, d: size.z },
+        footprintDelta: hasFp ? { w: size.x - fpW, h: size.y - fpH } : null,
         overhang: o ? { L: Math.max(o.L, 0), R: Math.max(o.R, 0), T: Math.max(o.T, 0), B: Math.max(o.B, 0) } : null,
       };
     });
@@ -713,8 +718,9 @@ export class GassienViewer {
   }
 
   // --- Export ---
-  /** PNG fond transparent, sans repères. @returns {Promise<Blob>} */
-  snapshotPNG({ scale = 2 } = {}) {
+  // Rend la scène sans repères et retourne un Blob image. `background` (hex) rend
+  // un fond opaque (requis pour le JPEG, qui n'a pas de transparence).
+  _renderToBlob({ scale = 2, mime = 'image/png', quality = 0.92, background = null } = {}) {
     return new Promise((resolve) => {
       const prev = this.helpers.visible;
       const prevBbox = this._bboxWanted;
@@ -722,18 +728,32 @@ export class GassienViewer {
       this.setBoundingBoxVisible(false);
       const prevRatio = this.renderer.getPixelRatio();
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * scale);
+      let prevClear, prevAlpha;
+      if (background) {
+        prevClear = new THREE.Color();
+        this.renderer.getClearColor(prevClear);
+        prevAlpha = this.renderer.getClearAlpha();
+        this.renderer.setClearColor(new THREE.Color(background), 1);
+      }
       this.resize();
       this.renderer.render(this.scene, this.camera);
       this.renderer.domElement.toBlob((blob) => {
         this.renderer.setPixelRatio(prevRatio);
+        if (background) this.renderer.setClearColor(prevClear, prevAlpha);
         this._setAllHelpersVisible(this._helpersWanted);
         this.helpers.visible = prev && this._helpersWanted;
         this.setBoundingBoxVisible(prevBbox);
         this.resize();
         resolve(blob);
-      }, 'image/png');
+      }, mime, quality);
     });
   }
+
+  /** PNG fond transparent, sans repères. @returns {Promise<Blob>} */
+  snapshotPNG(opts = {}) { return this._renderToBlob({ ...opts, mime: 'image/png' }); }
+
+  /** JPEG fond opaque (blanc par défaut), sans repères. @returns {Promise<Blob>} */
+  snapshotJPEG(opts = {}) { return this._renderToBlob({ background: '#ffffff', quality: 0.92, ...opts, mime: 'image/jpeg' }); }
 
   /** Rend le PNG (sans repères) et le copie dans le presse-papier. @returns {Promise<Blob>} */
   async copyPNGToClipboard(opts) {

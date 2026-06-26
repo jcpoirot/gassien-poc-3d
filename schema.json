@@ -3,448 +3,207 @@
     "version": "current",
     "baseRes": 3.5,
     "metalColor": "black",
-    "creationDate": "2026-06-15T09:40:45.369Z",
-    "lastUpdate": "2026-06-19T15:12:19.969Z",
+    "creationDate": "2026-06-22T14:55:03.654Z",
+    "lastUpdate": "2026-06-22T14:55:03.654Z",
     "woodColor": "black",
-    "vRes": 2,
-    "lastVersion": "v35",
-    "username": "jcpoirot",
-    "id": "63bb43f9-fa2b-490f-90f6-d048ccdc3e4b",
-    "res": 6,
+    "vRes": "4",
+    "lastVersion": "v0",
+    "username": "plong",
+    "id": "a6edf858-c9e7-496b-8081-f235ca48ca3a",
+    "res": "7",
     "elements": [
       {
-        "x": 80,
+        "offsetX": 0,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 0,
+        "x": 780,
         "width": 320,
-        "y": 44,
+        "y": 220,
+        "offsetWidth": 0,
         "id": 0,
         "type": "gridGF",
         "height": 308
       },
       {
-        "x": 400,
+        "offsetX": 0,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 0,
+        "x": 540,
         "width": 240,
-        "y": 44,
+        "y": 308,
+        "offsetWidth": 0,
         "id": 1,
         "type": "gridMF",
         "height": 308
       },
       {
-        "x": 160,
-        "width": 160,
-        "y": 352,
+        "offsetX": 0,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 0,
+        "x": 1100,
+        "width": 240,
+        "y": 396,
+        "offsetWidth": 0,
         "id": 2,
-        "type": "gridPF",
+        "type": "gridMF",
         "height": 308
       },
       {
-        "x": 320,
+        "offsetX": 0,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 0,
+        "x": 780,
         "width": 320,
-        "y": 352,
-        "id": 3,
+        "y": 528,
+        "offsetWidth": 0,
+        "id": 15,
         "type": "gridGS",
         "height": 176
       },
       {
-        "x": 640,
-        "width": 240,
-        "y": 264,
-        "id": 4,
-        "type": "gridMS",
-        "height": 176
-      },
-      {
-        "x": 1512,
-        "width": 180,
-        "y": 572,
-        "id": 5,
-        "type": "board40x15",
-        "height": 84
-      },
-      {
-        "x": 1344,
-        "width": 260,
-        "y": 396,
-        "id": 6,
-        "type": "board60x15",
-        "height": 84
-      },
-      {
-        "x": 892,
-        "width": 340,
-        "y": 44,
-        "id": 7,
-        "type": "board80x15",
-        "height": 84
-      },
-      {
-        "x": 136,
-        "width": 188,
-        "y": 572,
-        "id": 8,
-        "type": "board40x20",
-        "height": 88
-      },
-      {
-        "x": 48,
+        "offsetX": 28,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 10,
+        "x": 792,
         "width": 266,
         "y": 264,
-        "id": 9,
+        "offsetWidth": 4,
+        "id": 7,
         "type": "board60x20",
         "height": 88
       },
       {
-        "x": 880,
+        "offsetX": 30,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 10,
+        "x": 772,
         "width": 344,
-        "y": 132,
-        "id": 10,
+        "y": 616,
+        "offsetWidth": 4,
+        "id": 9,
         "type": "board80x20",
         "height": 88
       },
       {
-        "x": 604,
-        "width": 284,
-        "y": 308,
+        "offsetX": 28,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 10,
+        "x": 548,
+        "width": 266,
+        "y": 528,
+        "offsetWidth": 4,
         "id": 11,
-        "type": "board60x30_t2",
-        "height": 144
+        "type": "board60x20",
+        "height": 88
       },
       {
-        "x": 312,
-        "width": 284,
-        "y": 132,
-        "id": 12,
-        "type": "board60x30_t2_left",
-        "height": 144
-      },
-      {
-        "x": 308,
-        "width": 284,
-        "y": 264,
-        "id": 13,
-        "type": "board60x30_t2_right",
-        "height": 144
-      },
-      {
-        "x": 304,
-        "width": 284,
+        "offsetX": 30,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 10,
+        "x": 640,
+        "width": 344,
         "y": 396,
-        "id": 14,
-        "type": "board60x30_t3",
-        "height": 144
+        "offsetWidth": 4,
+        "id": 12,
+        "type": "board80x20",
+        "height": 88
       },
       {
-        "x": 1120,
-        "width": 240,
-        "y": 44,
-        "id": 15,
-        "type": "gridMF",
-        "height": 308
-      },
-      {
-        "x": 880,
-        "width": 240,
-        "y": 44,
-        "id": 16,
-        "type": "gridMF",
-        "height": 308
-      },
-      {
-        "x": 868,
-        "width": 362,
-        "y": 220,
-        "id": 17,
-        "type": "board80x30_t2",
-        "height": 142
-      },
-      {
-        "x": 1252,
-        "width": 362,
-        "y": 44,
-        "id": 18,
-        "type": "board80x30_t2_left",
-        "height": 142
-      },
-      {
-        "x": 1360,
-        "width": 320,
-        "y": 44,
-        "id": 19,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1360,
-        "width": 320,
-        "y": 352,
-        "id": 20,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1260,
-        "width": 362,
-        "y": 220,
-        "id": 21,
-        "type": "board80x30_t2_right",
-        "height": 142
-      },
-      {
-        "x": 996,
-        "width": 362,
-        "y": 528,
-        "id": 22,
-        "type": "board80x30_t3",
-        "height": 142
-      },
-      {
-        "x": 1040,
-        "width": 320,
-        "y": 352,
-        "id": 23,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1680,
-        "width": 320,
-        "y": 352,
-        "id": 24,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1680,
-        "width": 320,
-        "y": 44,
-        "id": 25,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1600,
-        "width": 402,
-        "y": 440,
-        "id": 26,
-        "type": "desk80x50",
-        "height": 164
-      },
-      {
-        "x": 1648,
-        "width": 320,
-        "y": 264,
-        "id": 27,
-        "type": "desk60x50",
-        "height": 164
-      },
-      {
-        "x": 356,
-        "width": 47,
-        "y": 132,
-        "id": 28,
-        "type": "potHolder_11",
-        "height": 42
-      },
-      {
-        "x": 128,
-        "width": 47,
-        "y": 44,
-        "id": 29,
-        "type": "potHolder_11_with_pot",
-        "height": 72
-      },
-      {
-        "x": 176,
-        "width": 64,
-        "y": 44,
-        "id": 30,
-        "type": "potHolder_15",
-        "height": 84
-      },
-      {
-        "x": 240,
-        "width": 64,
-        "y": 44,
-        "id": 31,
-        "type": "potHolder_15_with_pot",
-        "height": 84
-      },
-      {
-        "x": 304,
-        "width": 54,
-        "y": 44,
-        "id": 32,
-        "type": "vaseHolder_10",
-        "height": 46
-      },
-      {
-        "x": 356,
-        "width": 84,
-        "y": 44,
-        "id": 33,
-        "type": "vaseHolder_15",
-        "height": 50
-      },
-      {
-        "x": 440,
-        "width": 190,
-        "y": 44,
-        "id": 34,
-        "type": "frameHolder_40",
-        "height": 46
-      },
-      {
-        "x": 120,
-        "width": 68,
-        "y": 132,
-        "id": 35,
-        "type": "wireSupport",
-        "height": 40
-      },
-      {
-        "x": 212,
-        "width": 52,
-        "y": 88,
-        "id": 36,
-        "type": "hooks",
-        "height": 84
-      },
-      {
-        "x": 1660,
-        "width": 120,
-        "y": 44,
-        "id": 37,
-        "type": "glassesHolder",
-        "height": 40
-      },
-      {
-        "x": 1816,
-        "width": 120,
-        "y": 88,
-        "id": 38,
-        "type": "glassesHolder_with_glasses",
-        "height": 90
-      },
-      {
-        "x": 1764,
-        "width": 120,
-        "y": 440,
-        "id": 39,
-        "type": "computerHolder",
-        "height": 90
-      },
-      {
-        "x": 640,
-        "width": 320,
-        "y": 440,
-        "id": 40,
-        "type": "gridGF",
-        "height": 308
-      },
-      {
-        "x": 1688,
-        "width": 100,
-        "y": 132,
-        "id": 41,
-        "type": "hangerHolder",
-        "height": 120
-      },
-      {
-        "x": 664,
-        "width": 162,
-        "y": 616,
-        "id": 42,
-        "type": "ps40",
-        "height": 30
-      },
-      {
-        "x": 660,
-        "width": 243,
-        "y": 528,
-        "id": 43,
-        "type": "ps60",
-        "height": 30
-      },
-      {
-        "x": 640,
-        "width": 160,
-        "y": 660,
-        "id": 44,
-        "type": "wardrobe40",
-        "height": 78
-      },
-      {
-        "x": 2000,
-        "width": 320,
-        "y": 44,
-        "id": 45,
-        "type": "gridGS",
-        "height": 176
-      },
-      {
-        "x": 2000,
-        "width": 320,
-        "y": 308,
-        "id": 46,
-        "type": "gridGS",
-        "height": 176
-      },
-      {
-        "x": 1948,
-        "width": 160,
-        "y": 44,
-        "id": 47,
-        "type": "wardrobe40_with_hanger",
-        "height": 106
-      },
-      {
-        "x": 2080,
-        "width": 240,
-        "y": 132,
-        "id": 48,
-        "type": "wardrobe60",
-        "height": 78
-      },
-      {
-        "x": 1984,
-        "width": 240,
-        "y": 572,
-        "id": 49,
-        "type": "wardrobe60_with_hanger",
-        "height": 106
-      },
-      {
-        "x": 2000,
-        "width": 240,
+        "offsetX": 28,
+        "collision": false,
+        "offsetY": 0,
+        "offsetHeight": 10,
+        "x": 960,
+        "width": 266,
         "y": 484,
-        "id": 50,
-        "type": "gridMS",
-        "height": 176
+        "offsetWidth": 4,
+        "id": 14,
+        "type": "board60x20",
+        "height": 88
       },
       {
-        "x": 320,
-        "width": 320,
-        "y": 528,
-        "id": 51,
-        "type": "gridGF",
-        "height": 308
+        "x": 1092,
+        "y": 440,
+        "id": 4,
+        "type": "frameHolder_40"
       },
       {
-        "x": 316,
-        "width": 320,
+        "x": 1244,
         "y": 572,
-        "id": 52,
-        "type": "wardrobe80",
-        "height": 78
+        "id": 5,
+        "type": "vaseHolder_15"
       },
       {
-        "x": 312,
-        "width": 320,
-        "y": 704,
-        "id": 53,
-        "type": "wardrobe80_with_hanger",
-        "height": 106
+        "x": 560,
+        "y": 352,
+        "id": 10,
+        "type": "vaseHolder_15"
+      },
+      {
+        "realHeight": 80,
+        "view": true,
+        "x": 528,
+        "width": 820,
+        "y": 836,
+        "viewQuotes": true,
+        "boxName": "CANAPE",
+        "boxType": "wall",
+        "id": 16,
+        "realWidth": 205,
+        "type": "box",
+        "height": 320
+      },
+      {
+        "realHeight": 247,
+        "view": true,
+        "x": 1496,
+        "width": 64,
+        "y": 172,
+        "viewQuotes": true,
+        "boxName": "CANAPE",
+        "boxType": "vArrow",
+        "id": 17,
+        "realWidth": null,
+        "type": "box",
+        "height": 988
+      },
+      {
+        "realHeight": 121,
+        "view": true,
+        "x": 360,
+        "width": 64,
+        "y": 256,
+        "viewQuotes": true,
+        "boxName": "CANAPE",
+        "boxType": "vArrow",
+        "id": 18,
+        "realWidth": null,
+        "type": "box",
+        "height": 484
+      },
+      {
+        "realHeight": null,
+        "view": true,
+        "x": 540,
+        "width": 800,
+        "y": 24,
+        "viewQuotes": true,
+        "boxName": "CANAPE",
+        "boxType": "hArrow",
+        "id": 19,
+        "realWidth": 200,
+        "type": "box",
+        "height": 64
       }
     ],
-    "title": "Modèle GLB"
+    "title": "DOMINUES AIO5KK - copy 1"
   }
 }
